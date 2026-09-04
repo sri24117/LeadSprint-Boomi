@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "LeadSprint Operator Console"
+description = "A focused operator console for real-estate teams to manage new enquiries, qualification calls, verified appointments, safe follow-up, and weekly pilot reporting across US and India market profiles."
+version = "1.0.0"
+id = "artifacts/leadsprint"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24576
+
+[services.development]
+run = "pnpm --filter @workspace/leadsprint run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/leadsprint", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/leadsprint/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24576"
+BASE_PATH = "/"

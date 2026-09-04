@@ -1,0 +1,1 @@
+- [API contract generator compatibility](api-contract-generator.md) — keep new OpenAPI fields compatible with the workspace’s installed Zod runtime before extending routes.

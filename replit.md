@@ -1,6 +1,6 @@
-# [Project name]
+# LeadSprint Operator Console
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+LeadSprint is an operator console for real-estate teams to turn new enquiries into qualified, human-ready sales handoffs across US and India market profiles.
 
 ## Run & Operate
 
@@ -22,23 +22,34 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/leadsprint/src/App.tsx` — operator routes, data hooks, actions, and authenticated-console shell
+- `artifacts/leadsprint/src/index.css` — LeadSprint signal-desk visual language and responsive theme
+- `artifacts/api-server/src/routes/leadsprint.ts` — preview-safe API routes, demo seed data, policy-aware call/lead/booking actions
+- `lib/api-spec/openapi.yaml` — source of truth for API operations and generated client contracts
+- `lib/db/src/schema/leadsprint.ts` — PostgreSQL schema for business, contacts, leads, calls, appointments, usage, jobs, events, and suppression
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- One shared application supports market-specific business configuration; market differences are data, not separate products.
+- Provider actions are intentionally preview-safe and visible as demo mode until Retell, telephony, and Cal.com credentials are connected.
+- Lead and call records are persisted before provider work so later adapters can reconcile uncertain paid actions instead of blindly retrying.
+- The API contract is OpenAPI-first; React Query hooks and server validators are generated from the shared specification.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Today overview with operational metrics, setup warnings, upcoming verified appointments, and recent activity
+- Lead search, filtering, qualification updates, manual calls, suppression, follow-up, booking, and CSV import
+- Call log with state, outcome, transfer/booking status, summary, and error visibility
+- Verified appointments, business setup, weekly pilot reporting, and current usage metering
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+_No cross-project preferences recorded._
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Provider actions should remain fail-closed and visibly simulated until provider integrations are configured.
+- Regenerate the API client after changing `lib/api-spec/openapi.yaml`.
 
 ## Pointers
 
