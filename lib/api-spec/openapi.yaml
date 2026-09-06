@@ -38,6 +38,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /readyz:
+    get:
+      operationId: readinessCheck
+      tags: [health]
+      summary: Check provider readiness
+      parameters:
+        - name: x-leadsprint-market
+          in: header
+          schema:
+            type: string
+            enum: [US, IN]
+            default: US
+      responses:
+        "200":
+          description: Non-secret readiness state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessStatus"
   /auth/me:
     get:
       operationId: getAuthMe
@@ -369,6 +388,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Usage"
+  /webhooks/intake:
+    post:
+      operationId: receiveLeadIntake
+      tags: [leads]
+      summary: Receive a signed lead intake event
+      responses:
+        "201": { description: Lead accepted }
+        "200": { description: Duplicate lead ignored }
+        "401": { description: Invalid signature }
+  /webhooks/retell:
+    post:
+      operationId: receiveRetellEvent
+      tags: [calls]
+      summary: Receive a signed Retell event
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
+  /webhooks/twilio/status:
+    post:
+      operationId: receiveTwilioStatus
+      tags: [calls]
+      summary: Receive a Twilio call status callback
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
+  /webhooks/calcom:
+    post:
+      operationId: receiveCalcomEvent
+      tags: [appointments]
+      summary: Receive a signed Cal.com booking event
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
 components:
   parameters:
     Id:
@@ -392,6 +444,21 @@ components:
           type: string
       required:
         - status
+    ReadinessStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [ok] }
+        mode: { type: string, enum: [live, demo] }
+        market: { type: string, enum: [US, IN] }
+        providers:
+          type: object
+          properties:
+            retell: { type: boolean }
+            twilio: { type: boolean }
+            calcom: { type: boolean }
+            intake: { type: boolean }
+          required: [retell, twilio, calcom, intake]
+      required: [status, mode, market, providers]
     Error:
       type: object
       properties:

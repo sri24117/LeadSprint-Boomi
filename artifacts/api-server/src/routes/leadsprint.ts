@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router, type IRouter } from "express";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
@@ -35,8 +36,6 @@ import {
   GetWeeklyReportResponse,
   ImportLeadsBody,
   ImportLeadsResponse,
-  LoginBody,
-  LoginResponse,
   StartCallBody,
   StartCallResponse,
   SuppressLeadBody,
@@ -50,6 +49,14 @@ import {
   BookAppointmentBody,
   BookAppointmentResponse,
 } from "@workspace/api-zod";
+import {
+  createCalBooking,
+  getCalAvailability,
+  hasTwilioRoute,
+  providerConfig,
+  ProviderRequestError,
+  startRetellCall,
+} from "../lib/providers";
 
 const router: IRouter = Router();
 const BUSINESS_ID = "business_demo";
@@ -61,6 +68,10 @@ function id(prefix: string): string {
 
 function iso(value: Date | null): string | null {
   return value?.toISOString() ?? null;
+}
+
+function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
+  return req.leadSprintBusinessId ?? BUSINESS_ID;
 }
 
 async function ensureSeedData(): Promise<void> {
@@ -183,13 +194,13 @@ async function ensureSeedData(): Promise<void> {
 
 void ensureSeedData();
 
-async function getBusiness() {
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
+async function getBusiness(businessId = BUSINESS_ID) {
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
   return business;
 }
 
-async function getLeadDto(leadId: string) {
-  const [row] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, leadId), eq(leadsTable.businessId, BUSINESS_ID)));
+async function getLeadDto(leadId: string, businessId = BUSINESS_ID) {
+  const [row] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, leadId), eq(leadsTable.businessId, businessId)));
   if (!row) return undefined;
   const [lastCall] = await db.select({ endedAt: callsTable.endedAt, startedAt: callsTable.startedAt }).from(callsTable).where(eq(callsTable.leadId, leadId)).orderBy(desc(callsTable.createdAt)).limit(1);
   return {
@@ -203,8 +214,8 @@ async function getLeadDto(leadId: string) {
   };
 }
 
-async function getAppointmentDto(row: typeof appointmentsTable.$inferSelect) {
-  const [lead] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(eq(leadsTable.id, row.leadId));
+async function getAppointmentDto(row: typeof appointmentsTable.$inferSelect, businessId = BUSINESS_ID) {
+  const [lead] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, row.leadId), eq(leadsTable.businessId, businessId)));
   return {
     id: row.id, lead_id: row.leadId, lead_name: lead?.contact.name ?? "Unknown lead",
     service_or_property: row.serviceOrProperty, start_time: row.startTime.toISOString(), end_time: row.endTime.toISOString(),
@@ -222,25 +233,57 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
   };
 }
 
+function hasRetellConfig(market?: "US" | "IN"): boolean {
+  const config = providerConfig().retell;
+  const fromNumber = market === "IN"
+    ? config.fromNumberIN ?? config.fromNumber
+    : market === "US"
+      ? config.fromNumberUS ?? config.fromNumber
+      : config.fromNumberUS ?? config.fromNumberIN ?? config.fromNumber;
+  return Boolean(
+    config.apiKey &&
+      config.agentId &&
+      fromNumber,
+  );
+}
+
+function hasCalConfig(): boolean {
+  const config = providerConfig().calcom;
+  return Boolean(config.apiKey && config.eventTypeId);
+}
+
+function normalizedCalSlots(
+  value: unknown,
+  timezone: string,
+): Array<{ start_time: string; end_time: string; label: string }> {
+  const source =
+    value && typeof value === "object" && "data" in value
+      ? (value as { data?: unknown }).data
+      : value;
+  const candidates = Array.isArray(source)
+    ? source
+    : source && typeof source === "object" && "slots" in source
+      ? (source as { slots?: unknown }).slots
+      : [];
+  if (!Array.isArray(candidates)) return [];
+  return candidates.flatMap((slot) => {
+    if (!slot || typeof slot !== "object") return [];
+    const item = slot as Record<string, unknown>;
+    const start = typeof item.start === "string" ? item.start : typeof item.start_time === "string" ? item.start_time : "";
+    const end = typeof item.end === "string" ? item.end : typeof item.end_time === "string" ? item.end_time : "";
+    if (!start || !end) return [];
+    return [{ start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), label: new Date(start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }) }];
+  });
+}
+
 router.get("/auth/me", async (_req, res): Promise<void> => {
   await ensureSeedData();
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, USER_ID));
-  const business = await getBusiness();
+  const req = _req;
+  const businessId = scopedBusinessId(req);
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
+  const business = await getBusiness(businessId);
   if (!user || !business) { res.status(503).json({ error: "Operator setup is not ready" }); return; }
   res.json(GetAuthMeResponse.parse({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled },
-  }));
-});
-
-router.post("/auth/login", async (req, res): Promise<void> => {
-  const parsed = LoginBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, parsed.data.email));
-  if (!user) { res.status(401).json({ error: "Operator not found" }); return; }
-  const business = await getBusiness();
-  if (!business) { res.status(503).json({ error: "Business setup is not ready" }); return; }
-  res.json(LoginResponse.parse({
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
     business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled },
   }));
@@ -249,6 +292,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
 router.post("/auth/logout", async (_req, res): Promise<void> => { res.sendStatus(204); });
 
 router.get("/leads", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const query = GetLeadsQueryParams.safeParse(req.query);
   if (!query.success) { res.status(400).json({ error: query.error.message }); return; }
   const filters = [eq(leadsTable.businessId, BUSINESS_ID)];
@@ -258,19 +302,21 @@ router.get("/leads", async (req, res): Promise<void> => {
     filters.push(or(ilike(contactsTable.name, `%${query.data.search}%`), ilike(contactsTable.phone, `%${query.data.search}%`), ilike(leadsTable.location, `%${query.data.search}%`))!);
   }
   const rows = await db.select({ id: leadsTable.id }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(...filters)).orderBy(desc(leadsTable.createdAt));
-  const result = await Promise.all(rows.map((row) => getLeadDto(row.id)));
+  const result = await Promise.all(rows.map((row) => getLeadDto(row.id, BUSINESS_ID)));
   res.json(GetLeadsResponse.parse(result.filter(Boolean)));
 });
 
 router.get("/leads/:id", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const params = GetLeadParams.safeParse(req.params);
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-  const lead = await getLeadDto(params.data.id);
+  const lead = await getLeadDto(params.data.id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
   res.json(GetLeadResponse.parse(lead));
 });
 
 router.patch("/leads/:id", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const params = UpdateLeadParams.safeParse(req.params);
   const body = UpdateLeadBody.safeParse(req.body);
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
@@ -280,11 +326,12 @@ router.patch("/leads/:id", async (req, res): Promise<void> => {
     updatedAt: new Date(),
   }).where(and(eq(leadsTable.id, params.data.id), eq(leadsTable.businessId, BUSINESS_ID))).returning({ id: leadsTable.id });
   if (!updated) { res.status(404).json({ error: "Lead not found" }); return; }
-  const lead = await getLeadDto(updated.id);
+  const lead = await getLeadDto(updated.id, BUSINESS_ID);
   res.json(UpdateLeadResponse.parse(lead));
 });
 
 router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const params = SuppressLeadParams.safeParse(req.params);
   const body = SuppressLeadBody.safeParse(req.body ?? {});
   if (!params.success || !body.success) { res.status(400).json({ error: "Invalid suppression request" }); return; }
@@ -293,11 +340,12 @@ router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
   await db.update(contactsTable).set({ suppressedAt: new Date(), consentStatus: "suppressed" }).where(eq(contactsTable.id, row.contact.id));
   await db.update(leadsTable).set({ status: "suppressed", nextAction: "No further calls", updatedAt: new Date() }).where(eq(leadsTable.id, params.data.id));
   await db.insert(suppressionsTable).values({ id: id("suppression"), businessId: BUSINESS_ID, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator" });
-  const lead = await getLeadDto(params.data.id);
+  const lead = await getLeadDto(params.data.id, BUSINESS_ID);
   res.json(SuppressLeadResponse.parse(lead));
 });
 
 router.post("/leads/import", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const body = ImportLeadsBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   let imported = 0;
@@ -308,16 +356,17 @@ router.post("/leads/import", async (req, res): Promise<void> => {
     const contactId = id("contact");
     const leadId = id("lead");
     await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null });
-    await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness())?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
+    await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
     imported += 1;
   }
   await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "import", title: `${imported} leads imported`, detail: "CSV import completed with duplicate checks" });
   const leads = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID)).orderBy(desc(leadsTable.createdAt));
-  const result = await Promise.all(leads.slice(0, imported).map((lead) => getLeadDto(lead.id)));
+  const result = await Promise.all(leads.slice(0, imported).map((lead) => getLeadDto(lead.id, BUSINESS_ID)));
   res.json(ImportLeadsResponse.parse({ imported, skipped, leads: result.filter(Boolean) }));
 });
 
 router.get("/calls", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const query = GetCallsQueryParams.safeParse(req.query);
   if (!query.success) { res.status(400).json({ error: query.error.message }); return; }
   const rows = await db.select().from(callsTable).where(and(eq(callsTable.businessId, BUSINESS_ID), query.data.status ? eq(callsTable.status, query.data.status) : undefined)).orderBy(desc(callsTable.createdAt));
@@ -325,6 +374,7 @@ router.get("/calls", async (req, res): Promise<void> => {
 });
 
 router.get("/calls/:id", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const params = GetCallParams.safeParse(req.params);
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
   const [row] = await db.select().from(callsTable).where(and(eq(callsTable.id, params.data.id), eq(callsTable.businessId, BUSINESS_ID)));
@@ -333,29 +383,69 @@ router.get("/calls/:id", async (req, res): Promise<void> => {
 });
 
 router.post("/calls/start", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const body = StartCallBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
-  const lead = await getLeadDto(body.data.lead_id);
+  const lead = await getLeadDto(body.data.lead_id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
   if (lead.suppressed) { res.status(409).json({ error: "This lead is suppressed and cannot be called" }); return; }
   const [existing] = await db.select().from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), eq(callsTable.status, "in_progress"))).limit(1);
   if (existing) { res.json(StartCallResponse.parse(await getCallDto(existing))); return; }
   const callId = id("call");
-  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId: (await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(eq(leadsTable.id, body.data.lead_id)))[0]?.contactId ?? "", leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
-  await db.insert(workflowJobsTable).values({ id: id("job"), businessId: BUSINESS_ID, type: "initiate_call", idempotencyKey: callId });
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "call", title: `Call queued for ${lead.name}`, detail: "Policy checks passed · Retell adapter ready", });
-  res.status(201).json(StartCallResponse.parse(await getCallDto(created)));
+  const business = await getBusiness(BUSINESS_ID);
+  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId: (await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID))))[0]?.contactId ?? "", leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
+  let current = created;
+  const liveRetell = hasRetellConfig(business?.market === "IN" ? "IN" : "US");
+  if (liveRetell) {
+    try {
+      const live = await startRetellCall({
+        toNumber: lead.phone,
+        market: business?.market === "IN" ? "IN" : "US",
+        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id, call_id: callId },
+      });
+      [current] = await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Retell request failed";
+      [current] = await db.update(callsTable).set({ status: "uncertain", errorState: message, outcome: "Provider state uncertain", summary: "The call request could not be confirmed. Reconcile from the provider callback before retrying." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
+      req.log.error({ callId, err: message }, "Retell call start failed");
+    }
+  } else {
+    await db.insert(workflowJobsTable).values({ id: id("job"), businessId: BUSINESS_ID, type: "initiate_call", idempotencyKey: callId });
+  }
+  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "call", title: `Call ${liveRetell ? "started" : "queued"} for ${lead.name}`, detail: liveRetell ? "Retell accepted the call · awaiting signed callback" : "Demo mode · Retell credentials are not configured", });
+  res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
 });
 
 router.get("/appointments", async (_req, res): Promise<void> => {
+  const req = _req;
+  const BUSINESS_ID = scopedBusinessId(req);
   const rows = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed"))).orderBy(appointmentsTable.startTime);
-  res.json(GetAppointmentsResponse.parse(await Promise.all(rows.map(getAppointmentDto))));
+  res.json(GetAppointmentsResponse.parse(await Promise.all(rows.map((row) => getAppointmentDto(row, BUSINESS_ID)))));
 });
 
 router.post("/appointments/availability", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const body = GetAvailabilityBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
-  const business = await getBusiness();
+  const business = await getBusiness(BUSINESS_ID);
+  if (hasCalConfig()) {
+    try {
+      const start = new Date(`${body.data.date}T00:00:00Z`);
+      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+      const providerSlots = normalizedCalSlots(await getCalAvailability({ start: start.toISOString(), end: end.toISOString(), timeZone: business?.timezone ?? "UTC" }), business?.timezone ?? "UTC");
+      if (!providerSlots.length) {
+        res.status(502).json({ error: "Cal.com returned no usable availability" });
+        return;
+      }
+      res.json(GetAvailabilityResponse.parse(providerSlots));
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Cal.com availability failed";
+      req.log.error({ err: message }, "Cal.com availability failed");
+      res.status(error instanceof ProviderRequestError ? 502 : 503).json({ error: message });
+      return;
+    }
+  }
   const base = new Date(`${body.data.date}T13:00:00Z`);
   const slots = [0, 1, 2, 3].map((offset) => {
     const start = new Date(base.getTime() + offset * 60 * 60 * 1000);
@@ -366,22 +456,43 @@ router.post("/appointments/availability", async (req, res): Promise<void> => {
 });
 
 router.post("/appointments/book", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const body = BookAppointmentBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const [lead] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
-  const business = await getBusiness();
+  const business = await getBusiness(BUSINESS_ID);
   const appointmentId = id("appointment");
-  const [created] = await db.insert(appointmentsTable).values({ id: appointmentId, businessId: BUSINESS_ID, contactId: lead.contact.id, leadId: body.data.lead_id, serviceOrProperty: business?.projectName ?? "Configured appointment", startTime: new Date(body.data.slot_start), endTime: new Date(body.data.slot_end), timezone: business?.timezone ?? "UTC", externalId: `cal_${appointmentId}` }).returning();
+  let externalId = `cal_${appointmentId}`;
+  if (hasCalConfig()) {
+    try {
+      const booking = await createCalBooking({
+        start: body.data.slot_start.toISOString(),
+        end: body.data.slot_end.toISOString(),
+        timeZone: business?.timezone ?? "UTC",
+        attendee: { name: lead.contact.name, email: lead.contact.email ?? `${lead.contact.id}@lead.local`, phone: lead.contact.phone },
+        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id },
+      });
+      externalId = booking.bookingId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Cal.com booking failed";
+      req.log.error({ err: message, leadId: body.data.lead_id }, "Cal.com booking failed");
+      res.status(error instanceof ProviderRequestError ? 502 : 503).json({ error: message });
+      return;
+    }
+  }
+  const [created] = await db.insert(appointmentsTable).values({ id: appointmentId, businessId: BUSINESS_ID, contactId: lead.contact.id, leadId: body.data.lead_id, serviceOrProperty: business?.projectName ?? "Configured appointment", startTime: new Date(body.data.slot_start), endTime: new Date(body.data.slot_end), timezone: business?.timezone ?? "UTC", externalId }).returning();
   await db.update(leadsTable).set({ status: "booked", nextAction: "Appointment confirmed", updatedAt: new Date() }).where(eq(leadsTable.id, body.data.lead_id));
   await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "booking", title: `Appointment booked for ${lead.contact.name}`, detail: "Cal.com verification complete" });
-  const usage = await db.select().from(usageTable).where(eq(usageTable.id, "usage_demo")).limit(1);
-  if (usage[0]) await db.update(usageTable).set({ bookingCount: sql`${usageTable.bookingCount} + 1` }).where(eq(usageTable.id, "usage_demo"));
-  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(created)));
+  const usage = await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)).limit(1);
+  if (usage[0]) await db.update(usageTable).set({ bookingCount: sql`${usageTable.bookingCount} + 1` }).where(and(eq(usageTable.id, usage[0].id), eq(usageTable.businessId, BUSINESS_ID)));
+  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(created, BUSINESS_ID)));
 });
 
 router.get("/business-settings", async (_req, res): Promise<void> => {
-  const business = await getBusiness();
+  const req = _req;
+  const BUSINESS_ID = scopedBusinessId(req);
+  const business = await getBusiness(BUSINESS_ID);
   if (!business) { res.status(503).json({ error: "Business setup is not ready" }); return; }
   res.json(GetBusinessSettingsResponse.parse({
     id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber,
@@ -391,6 +502,7 @@ router.get("/business-settings", async (_req, res): Promise<void> => {
 });
 
 router.patch("/business-settings", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const body = UpdateBusinessSettingsBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const [updated] = await db.update(businessesTable).set({
@@ -407,6 +519,7 @@ router.patch("/business-settings", async (req, res): Promise<void> => {
 });
 
 router.get("/activity", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
   const query = GetActivityQueryParams.safeParse(req.query);
   if (!query.success) { res.status(400).json({ error: query.error.message }); return; }
   const rows = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(query.data.limit ?? 8);
@@ -414,16 +527,19 @@ router.get("/activity", async (req, res): Promise<void> => {
 });
 
 router.get("/today", async (_req, res): Promise<void> => {
+  const req = _req;
+  const BUSINESS_ID = scopedBusinessId(req);
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
   const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
   const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
   const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")));
   const activities = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(8);
-  const upcoming = await Promise.all(appointments.map(getAppointmentDto));
+  const upcoming = await Promise.all(appointments.map((row) => getAppointmentDto(row, BUSINESS_ID)));
   const warnings = [
-    ...(business?.retellAgentId ? [] : ["Retell agent is not connected"]),
-    ...(business?.calEventTypeId ? [] : ["Cal.com event type is not connected"]),
-    "Demo mode: provider actions are safely simulated until credentials are connected",
+    ...(hasRetellConfig() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
+    ...(hasCalConfig() ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
+    ...(business?.market === "IN" && !hasTwilioRoute("IN") ? ["India telephony route is not configured"] : []),
+    ...(business?.market !== "IN" && !hasTwilioRoute("US") ? ["US telephony route is not configured"] : []),
   ];
   res.json(GetTodayResponse.parse({
     date_label: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: business?.timezone ?? "UTC" }).format(new Date()),
@@ -435,15 +551,19 @@ router.get("/today", async (_req, res): Promise<void> => {
 });
 
 router.get("/reports/weekly", async (_req, res): Promise<void> => {
+  const req = _req;
+  const BUSINESS_ID = scopedBusinessId(req);
   const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
   const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
   const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, BUSINESS_ID));
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.id, "usage_demo")))[0];
+  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
   res.json(GetWeeklyReportResponse.parse({ period_label: "This week · pilot report", leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: Number(usage?.voiceMinutes ?? 0), estimated_provider_cost: Number(usage?.estimatedCost ?? 0) }));
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.id, "usage_demo")))[0];
+  const req = _req;
+  const BUSINESS_ID = scopedBusinessId(req);
+  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
   res.json(GetUsageResponse.parse({ period_label: "September 2026", voice_minutes: Number(usage?.voiceMinutes ?? 0), included_minutes: 300, sms_count: usage?.smsCount ?? 0, booking_count: usage?.bookingCount ?? 0, estimated_cost: Number(usage?.estimatedCost ?? 0) }));
 });
 

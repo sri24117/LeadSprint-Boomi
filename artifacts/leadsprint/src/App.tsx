@@ -1,5 +1,8 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { ClerkProvider, SignIn, SignUp, useAuth, useClerk } from '@clerk/react';
+import { publishableKeyFromHost } from '@clerk/react/internal';
+import { shadcn } from '@clerk/themes';
 import {
   Activity as ActivityIcon,
   AlertTriangle,
@@ -37,6 +40,7 @@ import {
 } from 'lucide-react';
 import {
   getGetAppointmentsQueryKey,
+  getGetAuthMeQueryKey,
   getGetBusinessSettingsQueryKey,
   getGetCallQueryKey,
   getGetCallsQueryKey,
@@ -57,36 +61,47 @@ import {
   useGetUsage,
   useGetWeeklyReport,
   useImportLeads,
-  useLogin,
-  useLogout,
   useStartCall,
   useSuppressLead,
   useUpdateBusinessSettings,
   useUpdateLead,
 } from '@workspace/api-client-react';
-import { Link, Route, Switch, useLocation, useRoute } from 'wouter';
+import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useRoute } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 import NotFound from '@/pages/not-found';
 
 const queryClient = new QueryClient();
 
 const navItems = [
-  { href: '/', label: 'Today', icon: LayoutDashboard },
-  { href: '/leads', label: 'Leads', icon: UsersRound },
-  { href: '/calls', label: 'Calls', icon: PhoneCall },
-  { href: '/appointments', label: 'Appointments', icon: CalendarDays },
-  { href: '/reports', label: 'Reports', icon: BarChart3 },
-  { href: '/business-settings', label: 'Business settings', icon: Settings2 },
+  { href: '/workspace', label: 'Today', icon: LayoutDashboard },
+  { href: '/workspace/leads', label: 'Leads', icon: UsersRound },
+  { href: '/workspace/calls', label: 'Calls', icon: PhoneCall },
+  { href: '/workspace/appointments', label: 'Appointments', icon: CalendarDays },
+  { href: '/workspace/reports', label: 'Reports', icon: BarChart3 },
+  { href: '/workspace/business-settings', label: 'Business settings', icon: Settings2 },
 ];
 
 const pageMeta: Record<string, { eyebrow: string; title: string; description: string }> = {
-  '/': { eyebrow: 'Operator desk', title: 'Today', description: 'The handoffs that need a human touch.' },
-  '/leads': { eyebrow: 'Pipeline', title: 'Leads', description: 'Find the next best conversation.' },
-  '/calls': { eyebrow: 'Voice desk', title: 'Calls', description: 'A clear trail for every attempted connection.' },
-  '/appointments': { eyebrow: 'Calendar', title: 'Appointments', description: 'Verified meetings, ready for the team.' },
-  '/reports': { eyebrow: 'Pilot pulse', title: 'Reports', description: 'A grounded view of your weekly operation.' },
-  '/business-settings': { eyebrow: 'Control room', title: 'Business settings', description: 'Policy first. Then automation.' },
+  '/workspace': { eyebrow: 'Operator desk', title: 'Today', description: 'The handoffs that need a human touch.' },
+  '/workspace/leads': { eyebrow: 'Pipeline', title: 'Leads', description: 'Find the next best conversation.' },
+  '/workspace/calls': { eyebrow: 'Voice desk', title: 'Calls', description: 'A clear trail for every attempted connection.' },
+  '/workspace/appointments': { eyebrow: 'Calendar', title: 'Appointments', description: 'Verified meetings, ready for the team.' },
+  '/workspace/reports': { eyebrow: 'Pilot pulse', title: 'Reports', description: 'A grounded view of your weekly operation.' },
+  '/workspace/business-settings': { eyebrow: 'Control room', title: 'Business settings', description: 'Policy first. Then automation.' },
 };
+
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+function stripBase(path: string): string {
+  return basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || '/'
+    : path;
+}
 
 function formatTime(value?: string | null) {
   if (!value) return '—';
@@ -163,16 +178,16 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
   const [location, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const health = useHealthCheck();
-  const logout = useLogout();
-  const meta = pageMeta[location] ?? pageMeta['/'];
+  const { signOut } = useClerk();
+  const meta = pageMeta[location] ?? pageMeta['/workspace'];
   const business = session?.business;
   const user = session?.user;
-  const signOut = () => logout.mutate(undefined, { onSuccess: () => setLocation('/') });
+  const handleSignOut = () => signOut({ redirectUrl: basePath || '/' }).then(() => setLocation('/'));
 
   return <div className="min-h-[100dvh] bg-background text-foreground">
     <aside className={`fixed inset-y-0 left-0 z-30 flex w-[248px] flex-col bg-[hsl(var(--sidebar))] px-4 py-5 text-[hsl(var(--sidebar-foreground))] transition-transform duration-300 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
       <div className="flex items-center justify-between px-3">
-        <Link href="/" className="flex items-center gap-3" data-testid="link-brand">
+        <Link href="/workspace" className="flex items-center gap-3" data-testid="link-brand">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[hsl(var(--sidebar-primary))] font-mono text-sm font-bold text-[hsl(var(--sidebar-primary-foreground))]">LS</span>
           <span><span className="block text-[15px] font-bold tracking-[-.02em]">LeadSprint</span><span className="block text-[10px] uppercase tracking-[.2em] text-[hsl(var(--sidebar-foreground)/.52)]">Operator console</span></span>
         </Link>
@@ -196,7 +211,7 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
         <div className="flex items-center gap-3 border-t border-[hsl(var(--sidebar-border))] px-2 pt-4">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[hsl(var(--sidebar-primary)/.18)] font-mono text-[11px] text-[hsl(var(--sidebar-primary))]">{initials(user?.name)}</div>
           <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{user?.name || 'Operator'}</p><p className="truncate text-[11px] text-[hsl(var(--sidebar-foreground)/.5)]">{business?.name || 'Workspace'}</p></div>
-          <button className="text-[hsl(var(--sidebar-foreground)/.55)] hover:text-[hsl(var(--sidebar-primary))]" onClick={signOut} data-testid="button-logout" title="Sign out"><LogOut size={15} /></button>
+           <button className="text-[hsl(var(--sidebar-foreground)/.55)] hover:text-[hsl(var(--sidebar-primary))]" onClick={handleSignOut} data-testid="button-logout" title="Sign out"><LogOut size={15} /></button>
         </div>
       </div>
     </aside>
@@ -220,23 +235,40 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
 }
 
 function AuthGate({ children }: { children: ReactNode }) {
-  const auth = useGetAuthMe();
-  const login = useLogin();
-  const [email, setEmail] = useState('');
-  if (auth.isLoading) return <div className="min-h-[100dvh] bg-background p-8"><div className="mx-auto max-w-[1200px]"><Skeleton className="h-8 w-36" /><div className="mt-14 grid gap-5 sm:grid-cols-3"><Skeleton className="h-32" /><Skeleton className="h-32" /><Skeleton className="h-32" /></div></div></div>;
-  if (auth.isError && !login.isSuccess) return <div className="flex min-h-[100dvh] items-center justify-center bg-[hsl(var(--background))] px-5">
-    <div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 shadow-[0_20px_70px_hsl(209_43%_22%/.12)]">
-      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[hsl(var(--primary))] font-mono text-sm font-bold text-[hsl(var(--primary-foreground))]">LS</div>
-      <p className="mt-8 text-[10px] font-bold uppercase tracking-[.2em] text-[hsl(var(--accent))]">Operator console</p><h1 className="mt-2 text-3xl font-bold tracking-[-.05em]">Back to the desk.</h1><p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in with your operator email to see today’s handoffs and policy status.</p>
-      <form className="mt-7 space-y-3" onSubmit={(event) => { event.preventDefault(); login.mutate({ data: { email } }); }}>
-        <label className="block text-xs font-bold text-foreground">Operator email<input data-testid="input-login-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@yourbusiness.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm outline-none transition focus:border-[hsl(var(--accent))] focus:ring-2 focus:ring-[hsl(var(--accent)/.15)]" /></label>
-        {login.isError && <p className="text-xs text-[hsl(var(--destructive))]">That email could not be signed in. Check it and try again.</p>}
-        <Button variant="primary" className="w-full py-2.5" data-testid="button-login" disabled={login.isPending}>{login.isPending && <Loader2 size={15} className="animate-spin" />}Enter workspace</Button>
-      </form>
-      <p className="mt-7 flex items-center gap-2 border-t border-border pt-5 text-[11px] text-muted-foreground"><ShieldCheck size={14} className="text-[hsl(var(--accent))]" /> Your workspace stays protected by policy checks.</p>
+  const { isLoaded, isSignedIn } = useAuth();
+  const auth = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey(), enabled: isLoaded && Boolean(isSignedIn) } });
+  if (!isLoaded || (isSignedIn && auth.isLoading)) return <div className="min-h-[100dvh] bg-background p-8"><div className="mx-auto max-w-[1200px]"><Skeleton className="h-8 w-36" /><div className="mt-14 grid gap-5 sm:grid-cols-3"><Skeleton className="h-32" /><Skeleton className="h-32" /><Skeleton className="h-32" /></div></div></div>;
+  if (!isSignedIn) return <LandingPage />;
+  if (auth.isError || !auth.data) return <AuthError />;
+  return <Shell session={auth.data}>{children}</Shell>;
+}
+
+function LandingPage() {
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-[hsl(var(--background))] px-5 py-12">
+    <div className="grid w-full max-w-[1050px] gap-10 rounded-3xl border border-border bg-[hsl(var(--card))] p-7 shadow-[0_24px_90px_hsl(209_43%_22%/.1)] md:grid-cols-[1.15fr_.85fr] md:p-12">
+      <div className="flex flex-col justify-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[hsl(var(--primary))] font-mono text-sm font-bold text-[hsl(var(--primary-foreground))]">LS</div>
+        <p className="mt-10 text-[10px] font-bold uppercase tracking-[.22em] text-[hsl(var(--accent))]">Lead response engine</p>
+        <h1 className="mt-3 max-w-xl text-4xl font-bold tracking-[-.06em] sm:text-5xl">Turn every enquiry into a human-ready handoff.</h1>
+        <p className="mt-5 max-w-lg text-base leading-7 text-muted-foreground">A policy-first operator console for real-estate teams running US and India market profiles.</p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Link href="/sign-in" className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-4 py-3 text-sm font-bold text-[hsl(var(--primary-foreground))] transition hover:brightness-110" data-testid="link-sign-in">Sign in to workspace</Link>
+          <Link href="/sign-up" className="inline-flex items-center justify-center rounded-lg border border-border px-4 py-3 text-sm font-bold text-foreground transition hover:bg-[hsl(var(--muted))]" data-testid="link-sign-up">Create workspace</Link>
+        </div>
+      </div>
+      <div className="rounded-2xl bg-[hsl(var(--primary))] p-6 text-[hsl(var(--primary-foreground))] md:p-8">
+        <p className="text-[10px] font-bold uppercase tracking-[.2em] text-[hsl(var(--secondary))]">Built for the moment after the form fill</p>
+        <div className="mt-8 space-y-5">
+          {['Qualify with approved language', 'Escalate when a human is needed', 'Book only verified appointments'].map((item, index) => <div key={item} className="flex items-start gap-3 border-t border-[hsl(var(--primary-foreground)/.15)] pt-5"><span className="font-mono text-xs text-[hsl(var(--secondary))]">0{index + 1}</span><p className="text-sm font-semibold leading-6">{item}</p></div>)}
+        </div>
+      </div>
     </div>
   </div>;
-  return <Shell session={auth.data}>{children}</Shell>;
+}
+
+function AuthError() {
+  const { signOut } = useClerk();
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-5"><div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center"><AlertTriangle className="mx-auto text-[hsl(var(--destructive))]" size={24} /><h1 className="mt-4 text-xl font-bold">Workspace setup is incomplete</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Your sign-in is valid, but the operator workspace could not be loaded. Try again or sign out.</p><div className="mt-6 flex justify-center gap-2"><Button onClick={() => window.location.reload()} variant="primary">Try again</Button><Button onClick={() => signOut({ redirectUrl: basePath || '/' })}>Sign out</Button></div></div></div>;
 }
 
 function MetricCard({ label, value, detail, icon: Icon, tone = 'default', href }: { label: string; value: number | string; detail: string; icon: typeof UsersRound; tone?: 'default' | 'warm' | 'alert' | 'good'; href?: string }) {
@@ -255,18 +287,18 @@ function TodayPage() {
   const { metrics, setup_warnings, upcoming, recent_activity } = today.data;
   const events = activity.data?.length ? activity.data : recent_activity;
   return <div className="animate-rise-in space-y-7">
-    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-sm text-muted-foreground">{today.data.date_label}</p><h2 className="mt-1 max-w-xl text-2xl font-bold tracking-[-.045em] sm:text-3xl">Good morning. Here’s where the desk stands.</h2></div><Link href="/leads" data-testid="link-review-leads" className="inline-flex items-center gap-2 self-start rounded-lg bg-[hsl(var(--secondary))] px-3.5 py-2.5 text-sm font-bold text-[hsl(var(--secondary-foreground))] transition hover:brightness-105 sm:self-auto">Review new leads <ChevronRight size={16} /></Link></div>
+    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-sm text-muted-foreground">{today.data.date_label}</p><h2 className="mt-1 max-w-xl text-2xl font-bold tracking-[-.045em] sm:text-3xl">Good morning. Here’s where the desk stands.</h2></div><Link href="/workspace/leads" data-testid="link-review-leads" className="inline-flex items-center gap-2 self-start rounded-lg bg-[hsl(var(--secondary))] px-3.5 py-2.5 text-sm font-bold text-[hsl(var(--secondary-foreground))] transition hover:brightness-105 sm:self-auto">Review new leads <ChevronRight size={16} /></Link></div>
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <MetricCard label="New leads" value={metrics.new_leads} detail="awaiting a first touch" icon={UsersRound} tone="warm" href="/leads" />
-      <MetricCard label="Calls in progress" value={metrics.calls_in_progress} detail="live right now" icon={PhoneCall} tone="good" href="/calls" />
-      <MetricCard label="Hot leads" value={metrics.hot_leads} detail="high intent signals" icon={Flame} tone="warm" href="/leads" />
-      <MetricCard label="Appointments today" value={metrics.appointments_today} detail="verified meetings" icon={CalendarDays} tone="good" href="/appointments" />
-      <MetricCard label="Failed calls" value={metrics.failed_calls} detail="need an operator look" icon={AlertTriangle} tone={metrics.failed_calls ? 'alert' : 'default'} href="/calls" />
+      <MetricCard label="New leads" value={metrics.new_leads} detail="awaiting a first touch" icon={UsersRound} tone="warm" href="/workspace/leads" />
+      <MetricCard label="Calls in progress" value={metrics.calls_in_progress} detail="live right now" icon={PhoneCall} tone="good" href="/workspace/calls" />
+      <MetricCard label="Hot leads" value={metrics.hot_leads} detail="high intent signals" icon={Flame} tone="warm" href="/workspace/leads" />
+      <MetricCard label="Appointments today" value={metrics.appointments_today} detail="verified meetings" icon={CalendarDays} tone="good" href="/workspace/appointments" />
+      <MetricCard label="Failed calls" value={metrics.failed_calls} detail="need an operator look" icon={AlertTriangle} tone={metrics.failed_calls ? 'alert' : 'default'} href="/workspace/calls" />
       <MetricCard label="Unresolved messages" value={metrics.unresolved_messages} detail="waiting on a reply" icon={MessageSquare} tone={metrics.unresolved_messages ? 'warm' : 'default'} />
     </div>
-    {setup_warnings.length > 0 && <section className="rounded-xl border border-[hsl(var(--secondary)/.55)] bg-[hsl(var(--secondary)/.14)] p-5"><div className="flex items-start gap-3"><div className="rounded-lg bg-[hsl(var(--secondary)/.45)] p-2 text-[hsl(var(--primary))]"><ShieldCheck size={18} /></div><div className="flex-1"><div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="font-bold">Setup checks before you dial</h3><Link href="/business-settings" className="text-xs font-bold text-[hsl(var(--accent))] hover:underline" data-testid="link-fix-settings">Open settings <ArrowUpRight size={13} className="ml-1 inline" /></Link></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{setup_warnings.map((warning, index) => <div key={warning} className="flex items-start gap-2 text-sm text-[hsl(var(--foreground)/.78)]"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[hsl(var(--secondary-foreground))]" />{warning}</div>)}</div></div></div></section>}
+    {setup_warnings.length > 0 && <section className="rounded-xl border border-[hsl(var(--secondary)/.55)] bg-[hsl(var(--secondary)/.14)] p-5"><div className="flex items-start gap-3"><div className="rounded-lg bg-[hsl(var(--secondary)/.45)] p-2 text-[hsl(var(--primary))]"><ShieldCheck size={18} /></div><div className="flex-1"><div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="font-bold">Setup checks before you dial</h3><Link href="/workspace/business-settings" className="text-xs font-bold text-[hsl(var(--accent))] hover:underline" data-testid="link-fix-settings">Open settings <ArrowUpRight size={13} className="ml-1 inline" /></Link></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{setup_warnings.map((warning, index) => <div key={warning} className="flex items-start gap-2 text-sm text-[hsl(var(--foreground)/.78)]"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[hsl(var(--secondary-foreground))]" />{warning}</div>)}</div></div></div></section>}
     <div className="grid gap-5 xl:grid-cols-[1.15fr_.85fr]">
-      <section className="rounded-xl border border-border bg-[hsl(var(--card))]"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold">Upcoming handoffs</h3><p className="mt-0.5 text-xs text-muted-foreground">Confirmed meetings on the calendar</p></div><Link href="/appointments" className="text-xs font-bold text-[hsl(var(--accent))]" data-testid="link-all-appointments">View all</Link></div>
+      <section className="rounded-xl border border-border bg-[hsl(var(--card))]"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h3 className="font-bold">Upcoming handoffs</h3><p className="mt-0.5 text-xs text-muted-foreground">Confirmed meetings on the calendar</p></div><Link href="/workspace/appointments" className="text-xs font-bold text-[hsl(var(--accent))]" data-testid="link-all-appointments">View all</Link></div>
         {upcoming.length === 0 ? <EmptyState icon={CalendarDays} title="No appointments on deck" description="Verified bookings will appear here once a lead chooses a slot." /> : <div className="divide-y divide-border">{upcoming.slice(0, 5).map((appointment) => <div key={appointment.id} className="flex items-center gap-3 px-5 py-4"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[hsl(var(--muted))] font-mono text-xs text-[hsl(var(--primary))]">{formatTime(appointment.start_time)}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{appointment.lead_name}</p><p className="truncate text-xs text-muted-foreground">{appointment.service_or_property} · {appointment.calendar_provider}</p></div><Badge className={statusTone(appointment.status)}>{appointment.status}</Badge></div>)}</div>}
       </section>
       <section className="rounded-xl border border-border bg-[hsl(var(--card))]"><div className="border-b border-border px-5 py-4"><h3 className="font-bold">Recent activity</h3><p className="mt-0.5 text-xs text-muted-foreground">The last few desk movements</p></div>
@@ -334,7 +366,7 @@ function LeadsPage() {
     reader.readAsText(file);
   };
   return <div className="animate-rise-in space-y-5">
-    <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"><div><p className="text-sm text-muted-foreground">A lead is a conversation waiting for context.</p><div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><span className="font-mono text-foreground">{leads.data?.length ?? '—'}</span> visible leads <span className="text-border">/</span> sorted by latest signal</div></div><div className="flex gap-2"><Button onClick={() => setShowImport(true)} data-testid="button-open-import"><Upload size={15} />Import CSV</Button><Link href="/leads" data-testid="link-refresh-leads" className="inline-flex items-center gap-2 rounded-lg border border-border bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--muted))]"><RefreshCw size={15} />Refresh</Link></div></div>
+    <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"><div><p className="text-sm text-muted-foreground">A lead is a conversation waiting for context.</p><div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><span className="font-mono text-foreground">{leads.data?.length ?? '—'}</span> visible leads <span className="text-border">/</span> sorted by latest signal</div></div><div className="flex gap-2"><Button onClick={() => setShowImport(true)} data-testid="button-open-import"><Upload size={15} />Import CSV</Button><Link href="/workspace/leads" data-testid="link-refresh-leads" className="inline-flex items-center gap-2 rounded-lg border border-border bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--muted))]"><RefreshCw size={15} />Refresh</Link></div></div>
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-[hsl(var(--card))] p-3 md:flex-row"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-2.5 text-muted-foreground" size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, phone, project…" className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:border-[hsl(var(--accent))]" data-testid="input-search-leads" /></div><div className="flex gap-2"><select value={status} onChange={(event) => setStatus(event.target.value)} className="rounded-lg border border-input bg-background px-3 py-2 text-sm" data-testid="select-lead-status"><option value="all">All statuses</option><option value="new">New</option><option value="contacted">Contacted</option><option value="qualified">Qualified</option><option value="booked">Booked</option><option value="suppressed">Suppressed</option></select><select value={score} onChange={(event) => setScore(event.target.value)} className="rounded-lg border border-input bg-background px-3 py-2 text-sm" data-testid="select-lead-score"><option value="all">All scores</option><option value="hot">Hot</option><option value="warm">Warm</option><option value="cold">Cold</option></select><Button variant="quiet" className="px-2" data-testid="button-filter-leads"><Filter size={16} /></Button></div></div>
     {leads.isLoading ? <div className="space-y-2">{[1, 2, 3, 4, 5].map((n) => <Skeleton key={n} className="h-20" />)}</div> : leads.isError ? <ErrorState retry={() => leads.refetch()} /> : !leads.data?.length ? <EmptyState icon={UsersRound} title="No leads match that view" description="Try clearing a filter or import a normalized CSV to start the desk." action={<Button onClick={() => { setSearch(''); setStatus('all'); setScore('all'); }} data-testid="button-clear-lead-filters">Clear filters</Button>} /> : <div className="overflow-hidden rounded-xl border border-border bg-[hsl(var(--card))]"><div className="hidden grid-cols-[minmax(220px,1.3fr)_1fr_1fr_1fr_120px] gap-4 border-b border-border bg-[hsl(var(--muted)/.55)] px-5 py-3 text-[10px] font-bold uppercase tracking-[.14em] text-muted-foreground md:grid"><span>Lead</span><span>Intent</span><span>Need</span><span>Next action</span><span /></div><div className="divide-y divide-border">{leads.data.map((lead) => <div key={lead.id} className="grid gap-3 px-4 py-4 transition hover:bg-[hsl(var(--muted)/.32)] md:grid-cols-[minmax(220px,1.3fr)_1fr_1fr_1fr_120px] md:items-center md:gap-4 md:px-5" data-testid={`row-lead-${lead.id}`}><button className="flex min-w-0 items-center gap-3 text-left" onClick={() => setSelected(lead.id)} data-testid={`button-open-lead-${lead.id}`}><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--secondary)/.35)] font-mono text-[11px] font-bold text-[hsl(var(--primary))]">{initials(lead.name)}</span><span className="min-w-0"><span className="block truncate text-sm font-bold">{lead.name}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{lead.phone} · {lead.project}</span></span></button><div className="flex items-center gap-2"><Badge className={scoreTone(lead.score)}>{lead.score}</Badge><span className="font-mono text-xs text-muted-foreground">{lead.intent_score}/100</span></div><div><p className="text-sm font-medium">{lead.property_type}</p><p className="mt-0.5 text-xs text-muted-foreground">{lead.budget_label} · {lead.timeline}</p></div><div><p className="text-sm font-medium">{lead.next_action || 'Review lead'}</p><p className="mt-0.5 text-xs text-muted-foreground">{relativeTime(lead.last_call || lead.created_at)}</p></div><div className="flex items-center justify-end gap-1"><button onClick={() => startCall.mutate({ data: { lead_id: lead.id } }, { onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() }) })} disabled={lead.suppressed || startCall.isPending} className="rounded-lg p-2 text-[hsl(var(--accent))] hover:bg-[hsl(var(--accent)/.1)] disabled:opacity-40" title="Call now" data-testid={`button-call-row-${lead.id}`}><Phone size={16} /></button><button onClick={() => setSelected(lead.id)} className="rounded-lg p-2 text-muted-foreground hover:bg-[hsl(var(--muted))]" title="Open details" data-testid={`button-details-row-${lead.id}`}><ChevronRight size={16} /></button></div></div>)}</div></div>}
     {selected && <LeadDetail id={selected} onClose={() => setSelected(null)} />}
@@ -357,7 +389,7 @@ function AppointmentsPage() {
   const appointments = useGetAppointments();
   if (appointments.isLoading) return <div className="space-y-3">{[1, 2, 3].map((n) => <Skeleton key={n} className="h-24" />)}</div>;
   if (appointments.isError) return <ErrorState retry={() => appointments.refetch()} />;
-  return <div className="animate-rise-in space-y-6"><div><p className="text-sm text-muted-foreground">Every row below has a source lead and a calendar confirmation.</p></div>{!appointments.data?.length ? <EmptyState icon={CalendarDays} title="No verified appointments yet" description="Once a lead books through the approved calendar, it will be visible here." /> : <div className="grid gap-4 lg:grid-cols-2">{appointments.data.map((appointment) => <div key={appointment.id} className="rounded-xl border border-border bg-[hsl(var(--card))] p-5 transition hover:-translate-y-0.5 hover:shadow-[0_8px_24px_hsl(209_43%_22%/.08)]" data-testid={`card-appointment-${appointment.id}`}><div className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(var(--accent)/.11)] font-mono text-xs font-bold text-[hsl(var(--accent))]">{formatTime(appointment.start_time)}</div><div><h3 className="font-bold">{appointment.lead_name}</h3><p className="mt-0.5 text-xs text-muted-foreground">{appointment.service_or_property}</p></div></div><Badge className={statusTone(appointment.status)}>{appointment.status}</Badge></div><div className="mt-5 grid grid-cols-2 gap-y-3 border-t border-border pt-4 text-sm"><Info label="Date" value={formatDate(appointment.start_time)} /><Info label="Timezone" value={appointment.timezone} /><Info label="Calendar" value={appointment.calendar_provider} /><Info label="External ID" value={appointment.external_id} /></div><Link href="/leads" className="mt-5 inline-flex items-center gap-1 text-xs font-bold text-[hsl(var(--accent))]" data-testid={`link-source-lead-${appointment.id}`}>Open source lead <ChevronRight size={13} /></Link></div>)}</div>}</div>;
+  return <div className="animate-rise-in space-y-6"><div><p className="text-sm text-muted-foreground">Every row below has a source lead and a calendar confirmation.</p></div>{!appointments.data?.length ? <EmptyState icon={CalendarDays} title="No verified appointments yet" description="Once a lead books through the approved calendar, it will be visible here." /> : <div className="grid gap-4 lg:grid-cols-2">{appointments.data.map((appointment) => <div key={appointment.id} className="rounded-xl border border-border bg-[hsl(var(--card))] p-5 transition hover:-translate-y-0.5 hover:shadow-[0_8px_24px_hsl(209_43%_22%/.08)]" data-testid={`card-appointment-${appointment.id}`}><div className="flex items-start justify-between gap-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(var(--accent)/.11)] font-mono text-xs font-bold text-[hsl(var(--accent))]">{formatTime(appointment.start_time)}</div><div><h3 className="font-bold">{appointment.lead_name}</h3><p className="mt-0.5 text-xs text-muted-foreground">{appointment.service_or_property}</p></div></div><Badge className={statusTone(appointment.status)}>{appointment.status}</Badge></div><div className="mt-5 grid grid-cols-2 gap-y-3 border-t border-border pt-4 text-sm"><Info label="Date" value={formatDate(appointment.start_time)} /><Info label="Timezone" value={appointment.timezone} /><Info label="Calendar" value={appointment.calendar_provider} /><Info label="External ID" value={appointment.external_id} /></div><Link href="/workspace/leads" className="mt-5 inline-flex items-center gap-1 text-xs font-bold text-[hsl(var(--accent))]" data-testid={`link-source-lead-${appointment.id}`}>Open source lead <ChevronRight size={13} /></Link></div>)}</div>}</div>;
 }
 
 function SettingsPage() {
@@ -399,12 +431,101 @@ function ReportsPage() {
   return <div className="animate-rise-in space-y-7"><div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end"><div><p className="text-sm text-muted-foreground">{data.period_label}</p><h2 className="mt-1 text-2xl font-bold tracking-[-.04em]">A weekly pulse, not a vanity dashboard.</h2></div><span className="font-mono text-xs text-muted-foreground">Updated just now</span></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[{ label: 'Leads received', value: data.leads_received, detail: 'new enquiries', icon: UsersRound }, { label: 'Connected calls', value: data.calls_connected, detail: `${data.calls_attempted} attempted`, icon: PhoneCall }, { label: 'Qualified', value: data.qualified_leads, detail: 'operator-confirmed', icon: Target }, { label: 'Appointments', value: data.appointments_booked, detail: `${data.transfer_rate}% transfer rate`, icon: CalendarDays }].map((item) => <div key={item.label} className="rounded-xl border border-border bg-[hsl(var(--card))] p-5"><div className="flex justify-between"><p className="text-xs font-semibold text-muted-foreground">{item.label}</p><item.icon size={17} className="text-[hsl(var(--accent))]" /></div><p className="mt-5 font-mono text-3xl font-bold tracking-[-.07em]">{item.value}</p><p className="mt-1 text-xs text-muted-foreground">{item.detail}</p></div>)}</div><div className="grid gap-5 lg:grid-cols-[1.1fr_.9fr]"><section className="rounded-xl border border-border bg-[hsl(var(--card))] p-5"><h3 className="font-bold">Funnel movement</h3><p className="mt-1 text-xs text-muted-foreground">Counts across the current pilot period.</p><div className="mt-7 space-y-5">{bars.map((bar, index) => <div key={bar.label}><div className="mb-2 flex justify-between text-sm"><span className="font-semibold">{bar.label}</span><span className="font-mono text-xs text-muted-foreground">{bar.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]"><div className="h-full rounded-full bg-[hsl(var(--accent))] transition-all" style={{ width: `${Math.max(7, Math.min(100, (bar.value / Math.max(1, data.leads_received)) * 100))}%`, opacity: 1 - index * .13 }} /></div></div>)}</div><div className="mt-7 grid grid-cols-2 gap-4 border-t border-border pt-5"><Info label="Failed actions" value={String(data.failed_actions)} /><Info label="Voice minutes" value={String(data.voice_minutes)} /></div></section><section className="rounded-xl border border-border bg-[hsl(var(--primary))] p-5 text-[hsl(var(--primary-foreground))]"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[hsl(var(--secondary))]">Current usage</p><h3 className="mt-2 text-xl font-bold">{usage.data.period_label}</h3></div><ActivityIcon size={19} className="text-[hsl(var(--secondary))]" /></div><div className="mt-8"><div className="flex items-end justify-between"><span className="text-sm text-[hsl(var(--primary-foreground)/.7)]">Voice minutes</span><span className="font-mono text-sm">{usage.data.voice_minutes} / {usage.data.included_minutes}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-[hsl(var(--primary-foreground)/.16)]"><div className="h-full rounded-full bg-[hsl(var(--secondary))]" style={{ width: `${Math.min(100, (usage.data.voice_minutes / Math.max(1, usage.data.included_minutes)) * 100)}%` }} /></div></div><div className="mt-7 grid grid-cols-2 gap-y-5 border-t border-[hsl(var(--primary-foreground)/.16)] pt-5"><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">SMS count</p><p className="mt-1 font-mono text-lg">{usage.data.sms_count}</p></div><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">Bookings</p><p className="mt-1 font-mono text-lg">{usage.data.booking_count}</p></div><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">Est. provider cost</p><p className="mt-1 font-mono text-lg">${usage.data.estimated_cost.toFixed(2)}</p></div></div></section></div></div>;
 }
 
+function SignInPage() {
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div>;
+}
+
+function SignUpPage() {
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div>;
+}
+
+function HomeRoute() {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return <div className="min-h-[100dvh] bg-background p-8"><Skeleton className="mx-auto h-8 max-w-[1200px]" /></div>;
+  return isSignedIn ? <Redirect to="/workspace" /> : <LandingPage />;
+}
+
+function WorkspaceRoute() {
+  return <ErrorBoundary><AuthGate><Switch><Route path="/workspace" component={TodayPage} /><Route path="/workspace/leads" component={LeadsPage} /><Route path="/workspace/calls" component={CallsPage} /><Route path="/workspace/appointments" component={AppointmentsPage} /><Route path="/workspace/business-settings" component={SettingsPage} /><Route path="/workspace/reports" component={ReportsPage} /><Route component={NotFound} /></Switch></AuthGate></ErrorBoundary>;
+}
+
+function ClerkQueryClientCacheInvalidator() {
+  const { addListener } = useClerk();
+  const queryClient = useQueryClient();
+  const previousUserId = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const unsubscribe = addListener(({ user }) => {
+      const userId = user?.id ?? null;
+      if (previousUserId.current !== undefined && previousUserId.current !== userId) queryClient.clear();
+      previousUserId.current = userId;
+    });
+    return unsubscribe;
+  }, [addListener, queryClient]);
+
+  return null;
+}
+
+const clerkAppearance = {
+  theme: shadcn,
+  cssLayerName: "clerk",
+  options: {
+    logoPlacement: "inside" as const,
+    logoLinkUrl: basePath || "/",
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+  },
+  variables: {
+    colorPrimary: "#183746",
+    colorForeground: "#1f2d32",
+    colorMutedForeground: "#667477",
+    colorDanger: "#a84b2b",
+    colorBackground: "#fbfaf5",
+    colorInput: "#ffffff",
+    colorInputForeground: "#1f2d32",
+    colorNeutral: "#d9d8d0",
+    fontFamily: "DM Sans, sans-serif",
+    borderRadius: "0.75rem",
+  },
+  elements: {
+    rootBox: "w-full flex justify-center",
+    cardBox: "bg-[#fbfaf5] rounded-2xl w-[440px] max-w-full overflow-hidden",
+    card: "!shadow-none !border-0 !bg-transparent !rounded-none",
+    footer: "!shadow-none !border-0 !bg-transparent !rounded-none",
+    headerTitle: "text-[#1f2d32]",
+    headerSubtitle: "text-[#667477]",
+    socialButtonsBlockButtonText: "text-[#1f2d32]",
+    formFieldLabel: "text-[#1f2d32]",
+    footerActionLink: "text-[#9c7125]",
+    footerActionText: "text-[#667477]",
+    dividerText: "text-[#667477]",
+    identityPreviewEditButton: "text-[#9c7125]",
+    formFieldSuccessText: "text-[#24634f]",
+    alertText: "text-[#a84b2b]",
+    logoBox: "mb-4",
+    logoImage: "h-10 w-10 rounded-xl",
+    socialButtonsBlockButton: "border-[#d9d8d0] bg-white hover:bg-[#f2f0e8]",
+    formButtonPrimary: "bg-[#183746] hover:bg-[#244b5c]",
+    formFieldInput: "border-[#d9d8d0] bg-white text-[#1f2d32]",
+    footerAction: "bg-transparent",
+    dividerLine: "bg-[#d9d8d0]",
+    alert: "border-[#e7c6b8] bg-[#fff7f2]",
+    otpCodeFieldInput: "border-[#d9d8d0] bg-white text-[#1f2d32]",
+    formFieldRow: "text-[#1f2d32]",
+    main: "bg-transparent",
+  },
+};
+
 function Router() {
-  return <ErrorBoundary><AuthGate><Switch><Route path="/" component={TodayPage} /><Route path="/leads" component={LeadsPage} /><Route path="/calls" component={CallsPage} /><Route path="/appointments" component={AppointmentsPage} /><Route path="/business-settings" component={SettingsPage} /><Route path="/reports" component={ReportsPage} /><Route component={NotFound} /></Switch></AuthGate></ErrorBoundary>;
+  return <Switch><Route path="/sign-in/*?" component={SignInPage} /><Route path="/sign-up/*?" component={SignUpPage} /><Route path="/" component={HomeRoute} /><Route component={WorkspaceRoute} /></Switch>;
+}
+
+function ClerkApp() {
+  const [, setLocation] = useLocation();
+  return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: "Welcome back", subtitle: "Sign in to access your workspace" } }, signUp: { start: { title: "Create your workspace", subtitle: "Start your LeadSprint operation" } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}><QueryClientProvider client={queryClient}><ClerkQueryClientCacheInvalidator /><Router /></QueryClientProvider></ClerkProvider>;
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><Router /></QueryClientProvider>;
+  return <WouterRouter base={basePath}><ClerkApp /></WouterRouter>;
 }
 
 export default App;
