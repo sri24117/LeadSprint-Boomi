@@ -57,6 +57,7 @@ import {
   ProviderRequestError,
   startRetellCall,
 } from "../lib/providers";
+import { evaluateCallPolicy } from "../lib/policy";
 
 const router: IRouter = Router();
 const BUSINESS_ID = "business_demo";
@@ -388,12 +389,36 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const lead = await getLeadDto(body.data.lead_id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
-  if (lead.suppressed) { res.status(409).json({ error: "This lead is suppressed and cannot be called" }); return; }
   const [existing] = await db.select().from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), eq(callsTable.status, "in_progress"))).limit(1);
   if (existing) { res.json(StartCallResponse.parse(await getCallDto(existing))); return; }
-  const callId = id("call");
+
   const business = await getBusiness(BUSINESS_ID);
-  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId: (await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID))))[0]?.contactId ?? "", leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
+  const [leadRow] = await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
+  const contactId = leadRow?.contactId ?? "";
+  const [contact] = contactId ? await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)) : [];
+  const priorAttempts = (await db.select({ id: callsTable.id }).from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), sql`${callsTable.status} != 'policy_blocked'`))).length;
+
+  const callId = id("call");
+
+  // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch.
+  const decision = evaluateCallPolicy({
+    business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
+    contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null },
+    attemptsSoFar: priorAttempts,
+  });
+
+  if (!decision.allowed) {
+    const [blocked] = await db.insert(callsTable).values({
+      id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell",
+      idempotencyKey: `manual_${callId}`, status: "policy_blocked",
+      outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason,
+    }).returning();
+    await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "policy", title: `Call blocked for ${lead.name}`, detail: decision.message ?? "Blocked by call policy." });
+    res.status(409).json(StartCallResponse.parse(await getCallDto(blocked)));
+    return;
+  }
+
+  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
   let current = created;
   const liveRetell = hasRetellConfig(business?.market === "IN" ? "IN" : "US");
   if (liveRetell) {
