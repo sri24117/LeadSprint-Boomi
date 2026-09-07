@@ -90,10 +90,19 @@ const pageMeta: Record<string, { eyebrow: string; title: string; description: st
   '/workspace/business-settings': { eyebrow: 'Control room', title: 'Business settings', description: 'Policy first. Then automation.' },
 };
 
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
+// Local development shortcut: when the build is made with
+// VITE_LEADSPRINT_DEMO_AUTH=true (and the API server runs with
+// LEADSPRINT_DEMO_AUTH=true / NODE_ENV != production), the console skips
+// Clerk entirely and talks to the seeded demo workspace. Never build a
+// public deployment with this flag set — it removes sign-in completely.
+const DEMO_AUTH = import.meta.env.VITE_LEADSPRINT_DEMO_AUTH === 'true';
+
+const clerkPubKey = DEMO_AUTH
+  ? ''
+  : publishableKeyFromHost(
+      window.location.hostname,
+      import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+    );
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -174,15 +183,35 @@ function ErrorState({ retry }: { retry?: () => void }) {
   </div>;
 }
 
+function useClerkSignOutAction() {
+  const { signOut } = useClerk();
+  return (redirectUrl: string) => signOut({ redirectUrl });
+}
+
+function useDemoSignOutAction() {
+  // No Clerk session exists in demo auth mode — "sign out" just returns
+  // to the landing page.
+  return async (_redirectUrl: string) => {};
+}
+
+const useSignOutAction = DEMO_AUTH ? useDemoSignOutAction : useClerkSignOutAction;
+
+function DemoAuthBanner() {
+  if (!DEMO_AUTH) return null;
+  return <div className="flex items-center justify-center gap-2 bg-[hsl(var(--destructive)/.12)] px-4 py-2 text-center text-[11px] font-semibold uppercase tracking-[.14em] text-[hsl(var(--destructive))]" data-testid="banner-demo-auth">
+    <ShieldCheck size={14} /> Demo auth — sign-in disabled, seeded workspace, local use only
+  </div>;
+}
+
 function Shell({ children, session }: { children: ReactNode; session: any }) {
   const [location, setLocation] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const health = useHealthCheck();
-  const { signOut } = useClerk();
+  const signOutAction = useSignOutAction();
   const meta = pageMeta[location] ?? pageMeta['/workspace'];
   const business = session?.business;
   const user = session?.user;
-  const handleSignOut = () => signOut({ redirectUrl: basePath || '/' }).then(() => setLocation('/'));
+  const handleSignOut = () => signOutAction(basePath || '/').then(() => setLocation('/'));
 
   return <div className="min-h-[100dvh] bg-background text-foreground">
     <aside className={`fixed inset-y-0 left-0 z-30 flex w-[248px] flex-col bg-[hsl(var(--sidebar))] px-4 py-5 text-[hsl(var(--sidebar-foreground))] transition-transform duration-300 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
@@ -217,6 +246,7 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
     </aside>
     {mobileOpen && <button className="fixed inset-0 z-20 bg-[#102632]/40 md:hidden" onClick={() => setMobileOpen(false)} data-testid="button-close-overlay" aria-label="Close menu" />}
     <main className="min-h-[100dvh] md:pl-[248px]">
+      <DemoAuthBanner />
       <header className="sticky top-0 z-10 border-b border-border bg-[hsl(var(--background)/.9)] backdrop-blur-xl">
         <div className="flex h-[76px] items-center justify-between px-5 sm:px-8 lg:px-10">
           <div className="flex items-center gap-3">
@@ -234,13 +264,26 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
   </div>;
 }
 
-function AuthGate({ children }: { children: ReactNode }) {
+function ClerkAuthGate({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   const auth = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey(), enabled: isLoaded && Boolean(isSignedIn) } });
-  if (!isLoaded || (isSignedIn && auth.isLoading)) return <div className="min-h-[100dvh] bg-background p-8"><div className="mx-auto max-w-[1200px]"><Skeleton className="h-8 w-36" /><div className="mt-14 grid gap-5 sm:grid-cols-3"><Skeleton className="h-32" /><Skeleton className="h-32" /><Skeleton className="h-32" /></div></div></div>;
+  if (!isLoaded || (isSignedIn && auth.isLoading)) return <AuthSkeleton />;
   if (!isSignedIn) return <LandingPage />;
   if (auth.isError || !auth.data) return <AuthError />;
   return <Shell session={auth.data}>{children}</Shell>;
+}
+
+function DemoAuthGate({ children }: { children: ReactNode }) {
+  const auth = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
+  if (auth.isLoading) return <AuthSkeleton />;
+  if (auth.isError || !auth.data) return <AuthError />;
+  return <Shell session={auth.data}>{children}</Shell>;
+}
+
+const AuthGate = DEMO_AUTH ? DemoAuthGate : ClerkAuthGate;
+
+function AuthSkeleton() {
+  return <div className="min-h-[100dvh] bg-background p-8"><div className="mx-auto max-w-[1200px]"><Skeleton className="h-8 w-36" /><div className="mt-14 grid gap-5 sm:grid-cols-3"><Skeleton className="h-32" /><Skeleton className="h-32" /><Skeleton className="h-32" /></div></div></div>;
 }
 
 function LandingPage() {
@@ -267,8 +310,8 @@ function LandingPage() {
 }
 
 function AuthError() {
-  const { signOut } = useClerk();
-  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-5"><div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center"><AlertTriangle className="mx-auto text-[hsl(var(--destructive))]" size={24} /><h1 className="mt-4 text-xl font-bold">Workspace setup is incomplete</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Your sign-in is valid, but the operator workspace could not be loaded. Try again or sign out.</p><div className="mt-6 flex justify-center gap-2"><Button onClick={() => window.location.reload()} variant="primary">Try again</Button><Button onClick={() => signOut({ redirectUrl: basePath || '/' })}>Sign out</Button></div></div></div>;
+  const signOutAction = useSignOutAction();
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-5"><div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center"><AlertTriangle className="mx-auto text-[hsl(var(--destructive))]" size={24} /><h1 className="mt-4 text-xl font-bold">Workspace setup is incomplete</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Your sign-in is valid, but the operator workspace could not be loaded. Try again or sign out.</p><div className="mt-6 flex justify-center gap-2"><Button onClick={() => window.location.reload()} variant="primary">Try again</Button><Button onClick={() => signOutAction(basePath || '/')}>Sign out</Button></div></div></div>;
 }
 
 function MetricCard({ label, value, detail, icon: Icon, tone = 'default', href }: { label: string; value: number | string; detail: string; icon: typeof UsersRound; tone?: 'default' | 'warm' | 'alert' | 'good'; href?: string }) {
@@ -431,19 +474,32 @@ function ReportsPage() {
   return <div className="animate-rise-in space-y-7"><div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end"><div><p className="text-sm text-muted-foreground">{data.period_label}</p><h2 className="mt-1 text-2xl font-bold tracking-[-.04em]">A weekly pulse, not a vanity dashboard.</h2></div><span className="font-mono text-xs text-muted-foreground">Updated just now</span></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{[{ label: 'Leads received', value: data.leads_received, detail: 'new enquiries', icon: UsersRound }, { label: 'Connected calls', value: data.calls_connected, detail: `${data.calls_attempted} attempted`, icon: PhoneCall }, { label: 'Qualified', value: data.qualified_leads, detail: 'operator-confirmed', icon: Target }, { label: 'Appointments', value: data.appointments_booked, detail: `${data.transfer_rate}% transfer rate`, icon: CalendarDays }].map((item) => <div key={item.label} className="rounded-xl border border-border bg-[hsl(var(--card))] p-5"><div className="flex justify-between"><p className="text-xs font-semibold text-muted-foreground">{item.label}</p><item.icon size={17} className="text-[hsl(var(--accent))]" /></div><p className="mt-5 font-mono text-3xl font-bold tracking-[-.07em]">{item.value}</p><p className="mt-1 text-xs text-muted-foreground">{item.detail}</p></div>)}</div><div className="grid gap-5 lg:grid-cols-[1.1fr_.9fr]"><section className="rounded-xl border border-border bg-[hsl(var(--card))] p-5"><h3 className="font-bold">Funnel movement</h3><p className="mt-1 text-xs text-muted-foreground">Counts across the current pilot period.</p><div className="mt-7 space-y-5">{bars.map((bar, index) => <div key={bar.label}><div className="mb-2 flex justify-between text-sm"><span className="font-semibold">{bar.label}</span><span className="font-mono text-xs text-muted-foreground">{bar.value}</span></div><div className="h-2 overflow-hidden rounded-full bg-[hsl(var(--muted))]"><div className="h-full rounded-full bg-[hsl(var(--accent))] transition-all" style={{ width: `${Math.max(7, Math.min(100, (bar.value / Math.max(1, data.leads_received)) * 100))}%`, opacity: 1 - index * .13 }} /></div></div>)}</div><div className="mt-7 grid grid-cols-2 gap-4 border-t border-border pt-5"><Info label="Failed actions" value={String(data.failed_actions)} /><Info label="Voice minutes" value={String(data.voice_minutes)} /></div></section><section className="rounded-xl border border-border bg-[hsl(var(--primary))] p-5 text-[hsl(var(--primary-foreground))]"><div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[hsl(var(--secondary))]">Current usage</p><h3 className="mt-2 text-xl font-bold">{usage.data.period_label}</h3></div><ActivityIcon size={19} className="text-[hsl(var(--secondary))]" /></div><div className="mt-8"><div className="flex items-end justify-between"><span className="text-sm text-[hsl(var(--primary-foreground)/.7)]">Voice minutes</span><span className="font-mono text-sm">{usage.data.voice_minutes} / {usage.data.included_minutes}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-[hsl(var(--primary-foreground)/.16)]"><div className="h-full rounded-full bg-[hsl(var(--secondary))]" style={{ width: `${Math.min(100, (usage.data.voice_minutes / Math.max(1, usage.data.included_minutes)) * 100)}%` }} /></div></div><div className="mt-7 grid grid-cols-2 gap-y-5 border-t border-[hsl(var(--primary-foreground)/.16)] pt-5"><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">SMS count</p><p className="mt-1 font-mono text-lg">{usage.data.sms_count}</p></div><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">Bookings</p><p className="mt-1 font-mono text-lg">{usage.data.booking_count}</p></div><div><p className="text-[11px] text-[hsl(var(--primary-foreground)/.55)]">Est. provider cost</p><p className="mt-1 font-mono text-lg">${usage.data.estimated_cost.toFixed(2)}</p></div></div></section></div></div>;
 }
 
-function SignInPage() {
+function DemoAuthNotice() {
+  return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4"><div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center"><ShieldCheck className="mx-auto text-[hsl(var(--accent))]" size={24} /><h1 className="mt-4 text-xl font-bold">Sign-in is disabled</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">This build runs in demo auth mode, so there is no Clerk instance to sign in to. The workspace opens directly against the seeded demo business.</p><div className="mt-6 flex justify-center"><Link href="/workspace" className="inline-flex items-center justify-center rounded-lg bg-[hsl(var(--primary))] px-4 py-3 text-sm font-bold text-[hsl(var(--primary-foreground))]" data-testid="link-open-workspace">Open workspace</Link></div></div></div>;
+}
+
+function ClerkSignInPage() {
   return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div>;
 }
 
-function SignUpPage() {
+function ClerkSignUpPage() {
   return <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div>;
 }
 
-function HomeRoute() {
+const SignInPage = DEMO_AUTH ? DemoAuthNotice : ClerkSignInPage;
+const SignUpPage = DEMO_AUTH ? DemoAuthNotice : ClerkSignUpPage;
+
+function ClerkHomeRoute() {
   const { isLoaded, isSignedIn } = useAuth();
   if (!isLoaded) return <div className="min-h-[100dvh] bg-background p-8"><Skeleton className="mx-auto h-8 max-w-[1200px]" /></div>;
   return isSignedIn ? <Redirect to="/workspace" /> : <LandingPage />;
 }
+
+function DemoHomeRoute() {
+  return <Redirect to="/workspace" />;
+}
+
+const HomeRoute = DEMO_AUTH ? DemoHomeRoute : ClerkHomeRoute;
 
 function WorkspaceRoute() {
   return <ErrorBoundary><AuthGate><Switch><Route path="/workspace" component={TodayPage} /><Route path="/workspace/leads" component={LeadsPage} /><Route path="/workspace/calls" component={CallsPage} /><Route path="/workspace/appointments" component={AppointmentsPage} /><Route path="/workspace/business-settings" component={SettingsPage} /><Route path="/workspace/reports" component={ReportsPage} /><Route component={NotFound} /></Switch></AuthGate></ErrorBoundary>;
@@ -524,8 +580,12 @@ function ClerkApp() {
   return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: "Welcome back", subtitle: "Sign in to access your workspace" } }, signUp: { start: { title: "Create your workspace", subtitle: "Start your LeadSprint operation" } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}><QueryClientProvider client={queryClient}><ClerkQueryClientCacheInvalidator /><Router /></QueryClientProvider></ClerkProvider>;
 }
 
+function DemoApp() {
+  return <QueryClientProvider client={queryClient}><Router /></QueryClientProvider>;
+}
+
 function App() {
-  return <WouterRouter base={basePath}><ClerkApp /></WouterRouter>;
+  return <WouterRouter base={basePath}>{DEMO_AUTH ? <DemoApp /> : <ClerkApp />}</WouterRouter>;
 }
 
 export default App;

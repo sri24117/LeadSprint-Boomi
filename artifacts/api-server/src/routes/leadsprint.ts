@@ -59,10 +59,16 @@ import {
   startRetellCall,
 } from "../lib/providers";
 import { evaluateCallPolicy } from "../lib/policy";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 const BUSINESS_ID = "business_demo";
 const USER_ID = "user_demo";
+
+// Exported so the demo-auth shortcut in routes/index.ts scopes requests to
+// exactly the same seeded workspace the console falls back to.
+export const DEMO_BUSINESS_ID = BUSINESS_ID;
+export const DEMO_USER_ID = USER_ID;
 
 function id(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
@@ -194,7 +200,14 @@ async function ensureSeedData(): Promise<void> {
   });
 }
 
-void ensureSeedData();
+// Fire-and-forget at boot so the demo workspace exists before the first
+// request. A rejected promise here (database not reachable yet) must not
+// become an unhandled rejection that takes the whole process down — the
+// health endpoints and webhooks are supposed to stay up, and the seed is
+// retried by the first /auth/me request anyway.
+void ensureSeedData().catch((err) => {
+  logger.error({ err }, "Demo seed data could not be created");
+});
 
 async function getBusiness(businessId = BUSINESS_ID) {
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));

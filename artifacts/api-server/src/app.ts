@@ -12,6 +12,24 @@ import {
 
 const app: Express = express();
 
+// Production runs behind a TLS-terminating reverse proxy (Coolify/Traefik),
+// so req.protocol / req.ip must come from the X-Forwarded-* headers —
+// otherwise the Twilio webhook signature (which is computed over the public
+// https:// URL) can never validate. Configurable because "how many proxy
+// hops to trust" is deployment-specific; set TRUST_PROXY=false when the app
+// is exposed directly.
+const trustProxy = process.env["TRUST_PROXY"] ?? "1";
+app.set(
+  "trust proxy",
+  trustProxy === "false"
+    ? false
+    : trustProxy === "true"
+      ? true
+      : Number.isNaN(Number(trustProxy))
+        ? trustProxy
+        : Number(trustProxy),
+);
+
 app.use(
   pinoHttp({
     logger,
@@ -56,6 +74,23 @@ app.use(
 // actually require a session. See requireAuth in middlewares/auth.ts.
 
 app.use("/api", router);
+
+// API errors must stay JSON. Express's default handler renders an HTML error
+// page (including the stack trace outside production), which is both a leak
+// and unparseable for the operator console's fetch client.
+app.use(
+  "/api",
+  (
+    err: unknown,
+    req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    req.log?.error({ err }, "Unhandled API error");
+    if (res.headersSent) return;
+    res.status(500).json({ error: "Internal server error" });
+  },
+);
 
 // Single-container deployment (e.g. Coolify): the frontend's static build
 // is copied to STATIC_DIR (see the production Dockerfile) and served from

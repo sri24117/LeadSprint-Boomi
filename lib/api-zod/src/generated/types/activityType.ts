@@ -15,4 +15,7 @@ export const ActivityType = {
   booking: 'booking',
   alert: 'alert',
   import: 'import',
+  intake: 'intake',
+  message: 'message',
+  policy: 'policy',
 } as const;

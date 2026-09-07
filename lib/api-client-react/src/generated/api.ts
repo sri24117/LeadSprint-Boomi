@@ -38,6 +38,7 @@ import type {
   LeadUpdate,
   LoginInput,
   NotFoundResponse,
+  ReadinessStatus,
   Slot,
   StartCallInput,
   SuppressionInput,
@@ -139,6 +140,83 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getHealthCheckQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getReadinessCheckUrl = () => {
+
+
+
+
+  return `/api/readyz`
+}
+
+/**
+ * @summary Check provider readiness
+ */
+export const readinessCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<ReadinessStatus> => {
+
+  return customFetch<ReadinessStatus>(getReadinessCheckUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getReadinessCheckQueryKey = () => {
+    return [
+    `/api/readyz`
+    ] as const;
+    }
+
+
+export const getReadinessCheckQueryOptions = <TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getReadinessCheckQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof readinessCheck>>> = ({ signal }) => readinessCheck({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ReadinessCheckQueryResult = NonNullable<Awaited<ReturnType<typeof readinessCheck>>>
+export type ReadinessCheckQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Check provider readiness
+ */
+
+export function useReadinessCheck<TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getReadinessCheckQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -1659,4 +1737,288 @@ export function useGetUsage<TData = Awaited<ReturnType<typeof getUsage>>, TError
 
 
 
+
+export const getReceiveLeadIntakeUrl = () => {
+
+
+
+
+  return `/api/webhooks/intake`
+}
+
+/**
+ * @summary Receive a signed lead intake event
+ */
+export const receiveLeadIntake = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getReceiveLeadIntakeUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReceiveLeadIntakeMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveLeadIntake>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receiveLeadIntake>>, TError,void, TContext> => {
+
+const mutationKey = ['receiveLeadIntake'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receiveLeadIntake>>, void> = () => {
+
+
+          return  receiveLeadIntake(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceiveLeadIntakeMutationResult = NonNullable<Awaited<ReturnType<typeof receiveLeadIntake>>>
+
+    export type ReceiveLeadIntakeMutationError = ErrorType<void>
+
+    /**
+ * @summary Receive a signed lead intake event
+ */
+export const useReceiveLeadIntake = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveLeadIntake>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof receiveLeadIntake>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReceiveLeadIntakeMutationOptions(options));
+    }
+
+export const getReceiveRetellEventUrl = () => {
+
+
+
+
+  return `/api/webhooks/retell`
+}
+
+/**
+ * @summary Receive a signed Retell event
+ */
+export const receiveRetellEvent = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getReceiveRetellEventUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReceiveRetellEventMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveRetellEvent>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receiveRetellEvent>>, TError,void, TContext> => {
+
+const mutationKey = ['receiveRetellEvent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receiveRetellEvent>>, void> = () => {
+
+
+          return  receiveRetellEvent(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceiveRetellEventMutationResult = NonNullable<Awaited<ReturnType<typeof receiveRetellEvent>>>
+
+    export type ReceiveRetellEventMutationError = ErrorType<void>
+
+    /**
+ * @summary Receive a signed Retell event
+ */
+export const useReceiveRetellEvent = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveRetellEvent>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof receiveRetellEvent>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReceiveRetellEventMutationOptions(options));
+    }
+
+export const getReceiveTwilioStatusUrl = () => {
+
+
+
+
+  return `/api/webhooks/twilio/status`
+}
+
+/**
+ * @summary Receive a Twilio call status callback
+ */
+export const receiveTwilioStatus = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getReceiveTwilioStatusUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReceiveTwilioStatusMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveTwilioStatus>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receiveTwilioStatus>>, TError,void, TContext> => {
+
+const mutationKey = ['receiveTwilioStatus'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receiveTwilioStatus>>, void> = () => {
+
+
+          return  receiveTwilioStatus(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceiveTwilioStatusMutationResult = NonNullable<Awaited<ReturnType<typeof receiveTwilioStatus>>>
+
+    export type ReceiveTwilioStatusMutationError = ErrorType<void>
+
+    /**
+ * @summary Receive a Twilio call status callback
+ */
+export const useReceiveTwilioStatus = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveTwilioStatus>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof receiveTwilioStatus>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReceiveTwilioStatusMutationOptions(options));
+    }
+
+export const getReceiveCalcomEventUrl = () => {
+
+
+
+
+  return `/api/webhooks/calcom`
+}
+
+/**
+ * @summary Receive a signed Cal.com booking event
+ */
+export const receiveCalcomEvent = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getReceiveCalcomEventUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getReceiveCalcomEventMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveCalcomEvent>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receiveCalcomEvent>>, TError,void, TContext> => {
+
+const mutationKey = ['receiveCalcomEvent'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receiveCalcomEvent>>, void> = () => {
+
+
+          return  receiveCalcomEvent(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceiveCalcomEventMutationResult = NonNullable<Awaited<ReturnType<typeof receiveCalcomEvent>>>
+
+    export type ReceiveCalcomEventMutationError = ErrorType<void>
+
+    /**
+ * @summary Receive a signed Cal.com booking event
+ */
+export const useReceiveCalcomEvent = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receiveCalcomEvent>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof receiveCalcomEvent>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getReceiveCalcomEventMutationOptions(options));
+    }
 
