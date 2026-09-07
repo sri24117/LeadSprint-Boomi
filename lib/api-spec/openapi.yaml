@@ -458,7 +458,8 @@ components:
             calcom: { type: boolean }
             intake: { type: boolean }
           required: [retell, twilio, calcom, intake]
-      required: [status, mode, market, providers]
+        auth: { type: string, enum: [clerk, demo, unconfigured] }
+      required: [status, mode, market, providers, auth]
     Error:
       type: object
       properties:
@@ -632,7 +633,11 @@ components:
       type: object
       properties:
         id: { type: string }
-        type: { type: string, enum: [lead, call, booking, alert, import] }
+        type:
+          {
+            type: string,
+            enum: [lead, call, booking, alert, import, intake, message, policy],
+          }
         title: { type: string }
         detail: { type: string }
         created_at: { type: string }

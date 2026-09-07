@@ -18,6 +18,29 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
+ * @summary Check provider readiness
+ */
+export const readinessCheckHeaderXLeadsprintMarketDefault = `US`;
+
+export const ReadinessCheckHeader = zod.object({
+  "x-leadsprint-market": zod.enum(['US', 'IN']).default(readinessCheckHeaderXLeadsprintMarketDefault)
+})
+
+export const ReadinessCheckResponse = zod.object({
+  "status": zod.enum(['ok']),
+  "mode": zod.enum(['live', 'demo']),
+  "market": zod.enum(['US', 'IN']),
+  "providers": zod.object({
+  "retell": zod.boolean(),
+  "twilio": zod.boolean(),
+  "calcom": zod.boolean(),
+  "intake": zod.boolean()
+}),
+  "auth": zod.enum(['clerk', 'demo', 'unconfigured'])
+})
+
+
+/**
  * @summary Get the current operator
  */
 export const GetAuthMeResponse = zod.object({
@@ -107,7 +130,7 @@ export const GetTodayResponse = zod.object({
 })),
   "recent_activity": zod.array(zod.object({
   "id": zod.string(),
-  "type": zod.enum(['lead', 'call', 'booking', 'alert', 'import']),
+  "type": zod.enum(['lead', 'call', 'booking', 'alert', 'import', 'intake', 'message', 'policy']),
   "title": zod.string(),
   "detail": zod.string(),
   "created_at": zod.string()
@@ -129,7 +152,7 @@ export const GetActivityQueryParams = zod.object({
 
 export const GetActivityResponseItem = zod.object({
   "id": zod.string(),
-  "type": zod.enum(['lead', 'call', 'booking', 'alert', 'import']),
+  "type": zod.enum(['lead', 'call', 'booking', 'alert', 'import', 'intake', 'message', 'policy']),
   "title": zod.string(),
   "detail": zod.string(),
   "created_at": zod.string()
@@ -585,5 +608,29 @@ export const GetUsageResponse = zod.object({
   "booking_count": zod.number(),
   "estimated_cost": zod.number()
 })
+
+
+/**
+ * @summary Receive a signed lead intake event
+ */
+export const ReceiveLeadIntakeResponse = zod.unknown()
+
+
+/**
+ * @summary Receive a signed Retell event
+ */
+export const ReceiveRetellEventResponse = zod.void()
+
+
+/**
+ * @summary Receive a Twilio call status callback
+ */
+export const ReceiveTwilioStatusResponse = zod.void()
+
+
+/**
+ * @summary Receive a signed Cal.com booking event
+ */
+export const ReceiveCalcomEventResponse = zod.void()
 
 

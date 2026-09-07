@@ -9,6 +9,53 @@ export interface HealthStatus {
   status: string;
 }
 
+export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];
+
+
+export const ReadinessStatusStatus = {
+  ok: 'ok',
+} as const;
+
+export type ReadinessStatusMode = typeof ReadinessStatusMode[keyof typeof ReadinessStatusMode];
+
+
+export const ReadinessStatusMode = {
+  live: 'live',
+  demo: 'demo',
+} as const;
+
+export type ReadinessStatusMarket = typeof ReadinessStatusMarket[keyof typeof ReadinessStatusMarket];
+
+
+export const ReadinessStatusMarket = {
+  US: 'US',
+  IN: 'IN',
+} as const;
+
+export type ReadinessStatusProviders = {
+  retell: boolean;
+  twilio: boolean;
+  calcom: boolean;
+  intake: boolean;
+};
+
+export type ReadinessStatusAuth = typeof ReadinessStatusAuth[keyof typeof ReadinessStatusAuth];
+
+
+export const ReadinessStatusAuth = {
+  clerk: 'clerk',
+  demo: 'demo',
+  unconfigured: 'unconfigured',
+} as const;
+
+export interface ReadinessStatus {
+  status: ReadinessStatusStatus;
+  mode: ReadinessStatusMode;
+  market: ReadinessStatusMarket;
+  providers: ReadinessStatusProviders;
+  auth: ReadinessStatusAuth;
+}
+
 export interface Error {
   error: string;
 }
@@ -247,6 +294,9 @@ export const ActivityType = {
   booking: 'booking',
   alert: 'alert',
   import: 'import',
+  intake: 'intake',
+  message: 'message',
+  policy: 'policy',
 } as const;
 
 export interface Activity {
