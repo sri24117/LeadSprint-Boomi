@@ -152,7 +152,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     await db.update(callsTable).set({
       status: terminal ? "completed" : status === "failed" ? "failed" : "in_progress",
       endedAt: terminal || status === "failed" ? new Date() : undefined,
-      durationSeconds: duration,
+      durationSeconds: duration ?? undefined,
       providerCallId: callId,
       transferred: transferAttempted ? transferSucceeded : undefined,
       summary: typeof body.call_analysis === "string" ? body.call_analysis : undefined,
