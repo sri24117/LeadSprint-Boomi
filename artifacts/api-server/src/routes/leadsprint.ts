@@ -52,6 +52,7 @@ import {
 import {
   createCalBooking,
   getCalAvailability,
+  hasRetellConfigForMarket,
   hasTwilioRoute,
   providerConfig,
   ProviderRequestError,
@@ -234,20 +235,6 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
   };
 }
 
-function hasRetellConfig(market?: "US" | "IN"): boolean {
-  const config = providerConfig().retell;
-  const fromNumber = market === "IN"
-    ? config.fromNumberIN ?? config.fromNumber
-    : market === "US"
-      ? config.fromNumberUS ?? config.fromNumber
-      : config.fromNumberUS ?? config.fromNumberIN ?? config.fromNumber;
-  return Boolean(
-    config.apiKey &&
-      config.agentId &&
-      fromNumber,
-  );
-}
-
 function hasCalConfig(): boolean {
   const config = providerConfig().calcom;
   return Boolean(config.apiKey && config.eventTypeId);
@@ -420,7 +407,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
 
   const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
   let current = created;
-  const liveRetell = hasRetellConfig(business?.market === "IN" ? "IN" : "US");
+  const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US");
   if (liveRetell) {
     try {
       const live = await startRetellCall({
@@ -561,7 +548,7 @@ router.get("/today", async (_req, res): Promise<void> => {
   const activities = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(8);
   const upcoming = await Promise.all(appointments.map((row) => getAppointmentDto(row, BUSINESS_ID)));
   const warnings = [
-    ...(hasRetellConfig() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
+    ...(hasRetellConfigForMarket() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
     ...(hasCalConfig() ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
     ...(business?.market === "IN" && !hasTwilioRoute("IN") ? ["India telephony route is not configured"] : []),
     ...(business?.market !== "IN" && !hasTwilioRoute("US") ? ["US telephony route is not configured"] : []),

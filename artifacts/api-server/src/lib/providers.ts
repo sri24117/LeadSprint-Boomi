@@ -126,6 +126,17 @@ export async function startRetellCall(input: {
   return { callId: body.call_id };
 }
 
+export function hasRetellConfigForMarket(market?: "US" | "IN"): boolean {
+  const config = providerConfig().retell;
+  const fromNumber =
+    market === "IN"
+      ? config.fromNumberIN ?? config.fromNumber
+      : market === "US"
+        ? config.fromNumberUS ?? config.fromNumber
+        : config.fromNumberUS ?? config.fromNumberIN ?? config.fromNumber;
+  return Boolean(config.apiKey && config.agentId && fromNumber);
+}
+
 export function hasTwilioRoute(market: "US" | "IN"): boolean {
   const config = providerConfig().twilio;
   const fromNumber =
