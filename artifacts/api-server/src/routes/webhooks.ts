@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   activitiesTable,
   businessesTable,
@@ -9,6 +9,7 @@ import {
   db,
   leadsTable,
   providerEventsTable,
+  usageTable,
 } from "@workspace/db";
 import {
   providerConfig,
@@ -134,20 +135,55 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     const status = typeof body.call_status === "string" ? body.call_status : typeof body.status === "string" ? body.status : "completed";
     const terminal = ["ended", "call_ended", "completed", "call_analyzed"].includes(status);
     const duration = typeof body.duration_ms === "number" ? Math.round(body.duration_ms / 1000) : null;
+    const disconnectionReason = typeof body.disconnection_reason === "string" ? body.disconnection_reason : undefined;
+
+    // A transfer was attempted if the agent's tool call requested one; Retell
+    // reports the outcome either as an explicit boolean or via disconnection
+    // reason. Treat ambiguous/failed transfer outcomes as "transfer failed",
+    // never as a silent success — per the safety rule that a failed transfer
+    // must become a message capture rather than disappear.
+    const transferAttempted = body.transfer_attempted === true || typeof body.transfer_to_number === "string";
+    const transferSucceeded = body.transferred === true || body.transfer_successful === true;
+    const failedTransferReasons = ["dial_failed", "dial_no_answer", "dial_busy", "voicemail_reached", "transfer_failed"];
+    const transferFailed = transferAttempted && !transferSucceeded && (disconnectionReason ? failedTransferReasons.includes(disconnectionReason) : true);
+
+    const [callRow] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+
     await db.update(callsTable).set({
       status: terminal ? "completed" : status === "failed" ? "failed" : "in_progress",
       endedAt: terminal || status === "failed" ? new Date() : undefined,
       durationSeconds: duration,
       providerCallId: callId,
+      transferred: transferAttempted ? transferSucceeded : undefined,
       summary: typeof body.call_analysis === "string" ? body.call_analysis : undefined,
-      outcome: typeof body.disconnection_reason === "string" ? body.disconnection_reason : undefined,
-      errorState: status === "failed" ? "Retell reported a failed call" : undefined,
+      outcome: transferFailed
+        ? "Transfer failed — message captured for manual follow-up"
+        : disconnectionReason,
+      errorState: status === "failed" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
     }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+
     if (duration != null) {
       await db.update(usageTable).set({
         voiceMinutes: sql`${usageTable.voiceMinutes} + ${duration / 60}`,
         estimatedCost: sql`${usageTable.estimatedCost} + ${(duration / 60) * 0.12}`,
       }).where(eq(usageTable.businessId, businessId));
+    }
+
+    if (transferFailed && callRow) {
+      // Never expose the failure to the caller or silently drop it: log an
+      // operator-visible activity and flip the lead to a manual follow-up
+      // state so someone calls the person back.
+      await db.insert(activitiesTable).values({
+        id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+        businessId,
+        type: "message",
+        title: "Transfer failed — message captured",
+        detail: `Call ${callId}: human transfer did not connect (${disconnectionReason ?? "unknown reason"}). Caller's message/callback request needs manual follow-up.`,
+      });
+      await db.update(leadsTable).set({
+        nextAction: "Call back — transfer to human did not connect",
+        updatedAt: new Date(),
+      }).where(and(eq(leadsTable.id, callRow.leadId), eq(leadsTable.businessId, businessId)));
     }
   }
   res.status(202).json({ accepted: true, duplicate: !accepted });

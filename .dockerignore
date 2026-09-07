@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.turbo
+.git
+.github
+.replit
+replit.md
+docs
+*.md
+.env
+.env.*
+!.env.example
