@@ -59,6 +59,7 @@ import {
   startRetellCall,
 } from "../lib/providers";
 import { evaluateCallPolicy } from "../lib/policy";
+import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -118,6 +119,7 @@ async function ensureSeedData(): Promise<void> {
       phone: item.phone,
       email: item.email,
       preferredLanguage: item.preferredLanguage,
+      timezone: timezoneForUSPhoneNumber(item.phone),
     });
     await db.insert(leadsTable).values({
       id: id("lead"),
@@ -356,7 +358,7 @@ router.post("/leads/import", async (req, res): Promise<void> => {
     if (existing[0]) { skipped += 1; continue; }
     const contactId = id("contact");
     const leadId = id("lead");
-    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null });
+    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null, timezone: timezoneForUSPhoneNumber(row.phone) });
     await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
     imported += 1;
   }
@@ -403,7 +405,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch.
   const decision = evaluateCallPolicy({
     business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-    contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null },
+    contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
     attemptsSoFar: priorAttempts,
   });
 
@@ -493,9 +495,8 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
     try {
       const booking = await createCalBooking({
         start: body.data.slot_start.toISOString(),
-        end: body.data.slot_end.toISOString(),
         timeZone: business?.timezone ?? "UTC",
-        attendee: { name: lead.contact.name, email: lead.contact.email ?? `${lead.contact.id}@lead.local`, phone: lead.contact.phone },
+        attendee: { name: lead.contact.name, email: lead.contact.email ?? `${lead.contact.id}@lead.local`, phoneNumber: lead.contact.phone },
         metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id },
       });
       externalId = booking.bookingId;

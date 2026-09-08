@@ -126,7 +126,7 @@ export const GetTodayResponse = zod.object({
   "timezone": zod.string(),
   "calendar_provider": zod.string(),
   "external_id": zod.string(),
-  "status": zod.enum(['confirmed', 'cancelled'])
+  "status": zod.enum(['confirmed', 'cancelled', 'needs_review'])
 })),
   "recent_activity": zod.array(zod.object({
   "id": zod.string(),
@@ -489,7 +489,7 @@ export const BookAppointmentResponse = zod.object({
   "timezone": zod.string(),
   "calendar_provider": zod.string(),
   "external_id": zod.string(),
-  "status": zod.enum(['confirmed', 'cancelled'])
+  "status": zod.enum(['confirmed', 'cancelled', 'needs_review'])
 })
 
 
@@ -506,7 +506,7 @@ export const GetAppointmentsResponseItem = zod.object({
   "timezone": zod.string(),
   "calendar_provider": zod.string(),
   "external_id": zod.string(),
-  "status": zod.enum(['confirmed', 'cancelled'])
+  "status": zod.enum(['confirmed', 'cancelled', 'needs_review'])
 })
 export const GetAppointmentsResponse = zod.array(GetAppointmentsResponseItem)
 

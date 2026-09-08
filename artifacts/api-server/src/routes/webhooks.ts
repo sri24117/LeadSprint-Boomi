@@ -3,6 +3,7 @@ import { Router, type IRouter, type Request } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import {
   activitiesTable,
+  appointmentsTable,
   businessesTable,
   callsTable,
   contactsTable,
@@ -12,10 +13,14 @@ import {
   usageTable,
 } from "@workspace/db";
 import {
+  extractRetellCall,
   providerConfig,
+  verifyCalSignature,
+  verifyRetellSignature,
   verifyTwilioSignature,
   verifyWebhookSignature,
 } from "../lib/providers";
+import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 
 const router: IRouter = Router();
 
@@ -95,7 +100,7 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
   }
   const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
   const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null });
+  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null, timezone: timezoneForUSPhoneNumber(phone) });
   await db.insert(leadsTable).values({
     id: leadId,
     businessId,
@@ -118,48 +123,68 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
 
 router.post("/webhooks/retell", async (req, res): Promise<void> => {
   const config = providerConfig();
-  if (!verifyWebhookSignature(rawBody(req), signatureFor(req), config.retell.webhookSecret)) {
+  // Retell signs with the API key that has the "webhook" badge, using
+  // v={timestamp},d={hex} over rawBody+timestamp — not the generic
+  // sha256-of-body scheme used elsewhere. See verifyRetellSignature.
+  const webhookKey = config.retell.webhookSecret ?? config.retell.apiKey;
+  if (!verifyRetellSignature(rawBody(req), req.get("x-retell-signature"), webhookKey)) {
     res.status(401).json({ error: "Invalid Retell signature" });
     return;
   }
   const body = req.body as Record<string, unknown>;
-  const callId = typeof body.call_id === "string" ? body.call_id : typeof body.callId === "string" ? body.callId : "";
-  const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
+  // Retell's real envelope is { event, call: {...} } — pull call fields
+  // from the nested object, not the top level.
+  const call = extractRetellCall(body);
+  const callId = typeof call.call_id === "string" ? call.call_id : "";
+  const metadata = (call.metadata && typeof call.metadata === "object" ? call.metadata : {}) as Record<string, unknown>;
   const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
   if (!callId || !businessId) {
-    res.status(400).json({ error: "call_id and metadata.business_id are required" });
+    res.status(400).json({ error: "call.call_id and call.metadata.business_id are required" });
     return;
   }
-  const accepted = await acceptProviderEvent({ businessId, provider: "Retell", externalEventId: eventId(req, body), eventType: typeof body.event === "string" ? body.event : "call_update", payload: body });
+  const [business] = await db.select({ id: businessesTable.id }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  if (!business) {
+    // Without this check, an unknown business_id (malformed payload, stale
+    // metadata, or a bad-faith request that got past signature verification
+    // some other way) hits the providerEventsTable foreign-key constraint
+    // and throws a raw 500 instead of a clean rejection.
+    res.status(404).json({ error: "Unknown business_id" });
+    return;
+  }
+  const eventType = typeof body.event === "string" ? body.event : "call_update";
+  const accepted = await acceptProviderEvent({ businessId, provider: "Retell", externalEventId: eventId(req, body), eventType, payload: body });
   if (accepted) {
-    const status = typeof body.call_status === "string" ? body.call_status : typeof body.status === "string" ? body.status : "completed";
-    const terminal = ["ended", "call_ended", "completed", "call_analyzed"].includes(status);
-    const duration = typeof body.duration_ms === "number" ? Math.round(body.duration_ms / 1000) : null;
-    const disconnectionReason = typeof body.disconnection_reason === "string" ? body.disconnection_reason : undefined;
+    // Real Retell call_status values: registered | ongoing | ended | error.
+    // call_analyzed is a separate event (post-call analysis complete) that
+    // arrives after call_ended and carries the transcript/summary.
+    const status = typeof call.call_status === "string" ? call.call_status : "ended";
+    const terminal = eventType === "call_ended" || eventType === "call_analyzed" || status === "ended" || status === "error";
+    const duration = typeof call.duration_ms === "number" ? Math.round(call.duration_ms / 1000) : null;
+    const disconnectionReason = typeof call.disconnection_reason === "string" ? call.disconnection_reason : undefined;
 
     // A transfer was attempted if the agent's tool call requested one; Retell
     // reports the outcome either as an explicit boolean or via disconnection
     // reason. Treat ambiguous/failed transfer outcomes as "transfer failed",
     // never as a silent success — per the safety rule that a failed transfer
     // must become a message capture rather than disappear.
-    const transferAttempted = body.transfer_attempted === true || typeof body.transfer_to_number === "string";
-    const transferSucceeded = body.transferred === true || body.transfer_successful === true;
+    const transferAttempted = call.transfer_attempted === true || typeof call.transfer_to_number === "string";
+    const transferSucceeded = call.transferred === true || call.transfer_successful === true;
     const failedTransferReasons = ["dial_failed", "dial_no_answer", "dial_busy", "voicemail_reached", "transfer_failed"];
     const transferFailed = transferAttempted && !transferSucceeded && (disconnectionReason ? failedTransferReasons.includes(disconnectionReason) : true);
 
     const [callRow] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
 
     await db.update(callsTable).set({
-      status: terminal ? "completed" : status === "failed" ? "failed" : "in_progress",
-      endedAt: terminal || status === "failed" ? new Date() : undefined,
+      status: terminal ? (status === "error" ? "failed" : "completed") : "in_progress",
+      endedAt: terminal ? new Date() : undefined,
       durationSeconds: duration ?? undefined,
       providerCallId: callId,
       transferred: transferAttempted ? transferSucceeded : undefined,
-      summary: typeof body.call_analysis === "string" ? body.call_analysis : undefined,
+      summary: typeof call.call_analysis === "string" ? call.call_analysis : undefined,
       outcome: transferFailed
         ? "Transfer failed — message captured for manual follow-up"
         : disconnectionReason,
-      errorState: status === "failed" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
+      errorState: status === "error" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
     }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
 
     if (duration != null) {
@@ -227,18 +252,48 @@ router.post("/webhooks/twilio/status", async (req, res): Promise<void> => {
 
 router.post("/webhooks/calcom", async (req, res): Promise<void> => {
   const config = providerConfig();
-  if (!verifyWebhookSignature(rawBody(req), signatureFor(req), config.calcom.webhookSecret)) {
+  if (!verifyCalSignature(rawBody(req), req.get("x-cal-signature-256"), config.calcom.webhookSecret)) {
     res.status(401).json({ error: "Invalid Cal.com signature" });
     return;
   }
   const body = req.body as Record<string, unknown>;
-  const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
+  // Cal.com's real webhook envelope is { triggerEvent, createdAt, payload }.
+  const payload = (body.payload && typeof body.payload === "object" ? body.payload : {}) as Record<string, unknown>;
+  const metadata = (payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}) as Record<string, unknown>;
   const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
   if (!businessId) {
-    res.status(400).json({ error: "metadata.business_id is required" });
+    res.status(400).json({ error: "payload.metadata.business_id is required" });
     return;
   }
-  const accepted = await acceptProviderEvent({ businessId, provider: "Cal.com", externalEventId: eventId(req, body), eventType: typeof body.triggerEvent === "string" ? body.triggerEvent : "booking", payload: body });
+  const [business] = await db.select({ id: businessesTable.id }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  if (!business) {
+    res.status(404).json({ error: "Unknown business_id" });
+    return;
+  }
+  const triggerEvent = typeof body.triggerEvent === "string" ? body.triggerEvent : "booking";
+  const accepted = await acceptProviderEvent({ businessId, provider: "Cal.com", externalEventId: eventId(req, body), eventType: triggerEvent, payload: body });
+  if (accepted) {
+    // A webhook that only archives the event never updates the console —
+    // the appointment row itself has to reflect cancellation/reschedule,
+    // or the operator keeps seeing a confirmed appointment that no longer
+    // exists on the actual calendar.
+    const externalId = typeof payload.uid === "string" ? payload.uid : typeof payload.bookingId !== "undefined" ? String(payload.bookingId) : "";
+    if (externalId) {
+      if (triggerEvent === "BOOKING_CANCELLED") {
+        await db.update(appointmentsTable).set({ status: "cancelled" }).where(and(eq(appointmentsTable.businessId, businessId), eq(appointmentsTable.externalId, externalId)));
+      } else if (triggerEvent === "BOOKING_RESCHEDULED") {
+        const startTime = typeof payload.startTime === "string" ? new Date(payload.startTime) : undefined;
+        const endTime = typeof payload.endTime === "string" ? new Date(payload.endTime) : undefined;
+        await db.update(appointmentsTable).set({
+          startTime,
+          endTime,
+          // If Cal.com didn't include the new times in this payload, don't
+          // silently keep showing the old time as confirmed — force a look.
+          status: startTime && endTime ? "confirmed" : "needs_review",
+        }).where(and(eq(appointmentsTable.businessId, businessId), eq(appointmentsTable.externalId, externalId)));
+      }
+    }
+  }
   res.status(202).json({ accepted: true, duplicate: !accepted });
 });
 

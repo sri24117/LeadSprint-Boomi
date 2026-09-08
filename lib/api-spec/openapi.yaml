@@ -607,7 +607,7 @@ components:
         timezone: { type: string }
         calendar_provider: { type: string }
         external_id: { type: string }
-        status: { type: string, enum: [confirmed, cancelled] }
+        status: { type: string, enum: [confirmed, cancelled, needs_review] }
       required: [id, lead_id, lead_name, service_or_property, start_time, end_time, timezone, calendar_provider, external_id, status]
     AvailabilityInput:
       type: object
