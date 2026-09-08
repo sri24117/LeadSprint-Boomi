@@ -12,4 +12,5 @@ export type AppointmentStatus = typeof AppointmentStatus[keyof typeof Appointmen
 export const AppointmentStatus = {
   confirmed: 'confirmed',
   cancelled: 'cancelled',
+  needs_review: 'needs_review',
 } as const;

@@ -18,6 +18,7 @@
 export type PolicyBlockReason =
   | "consent_invalid"
   | "suppressed"
+  | "location_unknown"
   | "quiet_hours"
   | "attempt_limit"
   | "kill_switch";
@@ -37,6 +38,14 @@ export interface PolicyBusinessInput {
 export interface PolicyContactInput {
   consentStatus: string;
   suppressedAt: Date | null;
+  // The CALLED PARTY's IANA timezone (see lib/areaCodeTimezones.ts) — not
+  // the business's. TCPA quiet hours (8am–9pm) are defined by the
+  // recipient's local time. `null`/`undefined` means we couldn't
+  // determine it, which blocks the call rather than falling back to the
+  // business's timezone — an unverified location is treated the same as
+  // an unsafe one, per the product spec's "block ambiguous or invalid
+  // location data" requirement.
+  timezone: string | null | undefined;
 }
 
 /**
@@ -115,11 +124,19 @@ export function evaluateCallPolicy(input: {
     };
   }
 
-  if (isWithinQuietHours(business.quietHours, business.timezone, now)) {
+  if (!contact.timezone) {
+    return {
+      allowed: false,
+      reason: "location_unknown",
+      message: "Could not determine the recipient's timezone; blocking rather than guessing.",
+    };
+  }
+
+  if (isWithinQuietHours(business.quietHours, contact.timezone, now)) {
     return {
       allowed: false,
       reason: "quiet_hours",
-      message: `Outside allowed calling hours (${business.quietHours} ${business.timezone}).`,
+      message: `Outside allowed calling hours (${business.quietHours} ${contact.timezone}, recipient local time).`,
     };
   }
 
