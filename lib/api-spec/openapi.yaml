@@ -1,0 +1,721 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: LeadSprint operator console API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Operator session
+  - name: dashboard
+    description: Operator overview and activity
+  - name: leads
+    description: Lead intake and qualification
+  - name: calls
+    description: Call logs and safe call initiation
+  - name: appointments
+    description: Verified appointments
+  - name: settings
+    description: Business configuration
+  - name: reports
+    description: Weekly reports and usage
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /readyz:
+    get:
+      operationId: readinessCheck
+      tags: [health]
+      summary: Check provider readiness
+      parameters:
+        - name: x-leadsprint-market
+          in: header
+          schema:
+            type: string
+            enum: [US, IN]
+            default: US
+      responses:
+        "200":
+          description: Non-secret readiness state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessStatus"
+  /auth/me:
+    get:
+      operationId: getAuthMe
+      tags: [auth]
+      summary: Get the current operator
+      responses:
+        "200":
+          description: Current operator session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Start an operator session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Signed-in operator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: End the operator session
+      responses:
+        "204":
+          description: Session ended
+  /today:
+    get:
+      operationId: getToday
+      tags: [dashboard]
+      summary: Get the operator overview
+      responses:
+        "200":
+          description: Overview data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Today"
+  /activity:
+    get:
+      operationId: getActivity
+      tags: [dashboard]
+      summary: Get recent operator activity
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: number
+            minimum: 1
+            maximum: 20
+            default: 8
+      responses:
+        "200":
+          description: Recent activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Activity"
+  /leads:
+    get:
+      operationId: getLeads
+      tags: [leads]
+      summary: List leads
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [new, contacted, qualified, booked, closed, suppressed]
+        - name: score
+          in: query
+          schema:
+            type: string
+            enum: [hot, warm, cold]
+      responses:
+        "200":
+          description: Lead list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Lead"
+  /leads/import:
+    post:
+      operationId: importLeads
+      tags: [leads]
+      summary: Import leads from normalized CSV rows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeadImportInput"
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportResult"
+  /leads/{id}:
+    get:
+      operationId: getLead
+      tags: [leads]
+      summary: Get a lead
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Lead detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateLead
+      tags: [leads]
+      summary: Update lead qualification or follow-up
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeadUpdate"
+      responses:
+        "200":
+          description: Updated lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+  /leads/{id}/suppress:
+    post:
+      operationId: suppressLead
+      tags: [leads]
+      summary: Suppress a lead from future calls
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuppressionInput"
+      responses:
+        "200":
+          description: Suppressed lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+  /calls:
+    get:
+      operationId: getCalls
+      tags: [calls]
+      summary: List recent calls
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [created, policy_blocked, queued, provider_requesting, provider_accepted, in_progress, completed, failed, uncertain]
+      responses:
+        "200":
+          description: Call list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Call"
+  /calls/start:
+    post:
+      operationId: startCall
+      tags: [calls]
+      summary: Safely queue a call for a lead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartCallInput"
+      responses:
+        "201":
+          description: Queued call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+  /calls/{id}:
+    get:
+      operationId: getCall
+      tags: [calls]
+      summary: Get a call detail
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Call detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+  /appointments/availability:
+    post:
+      operationId: getAvailability
+      tags: [appointments]
+      summary: Get confirmed calendar availability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityInput"
+      responses:
+        "200":
+          description: Available slots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Slot"
+  /appointments/book:
+    post:
+      operationId: bookAppointment
+      tags: [appointments]
+      summary: Book and verify an appointment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppointmentInput"
+      responses:
+        "201":
+          description: Verified appointment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Appointment"
+  /appointments:
+    get:
+      operationId: getAppointments
+      tags: [appointments]
+      summary: List verified appointments
+      responses:
+        "200":
+          description: Appointment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Appointment"
+  /business-settings:
+    get:
+      operationId: getBusinessSettings
+      tags: [settings]
+      summary: Get business configuration
+      responses:
+        "200":
+          description: Business configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessSettings"
+    patch:
+      operationId: updateBusinessSettings
+      tags: [settings]
+      summary: Update business configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessSettingsUpdate"
+      responses:
+        "200":
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessSettings"
+  /reports/weekly:
+    get:
+      operationId: getWeeklyReport
+      tags: [reports]
+      summary: Get the weekly pilot report
+      responses:
+        "200":
+          description: Weekly report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeeklyReport"
+  /usage:
+    get:
+      operationId: getUsage
+      tags: [reports]
+      summary: Get current period usage
+      responses:
+        "200":
+          description: Usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Usage"
+  /webhooks/intake:
+    post:
+      operationId: receiveLeadIntake
+      tags: [leads]
+      summary: Receive a signed lead intake event
+      responses:
+        "201": { description: Lead accepted }
+        "200": { description: Duplicate lead ignored }
+        "401": { description: Invalid signature }
+  /webhooks/retell:
+    post:
+      operationId: receiveRetellEvent
+      tags: [calls]
+      summary: Receive a signed Retell event
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
+  /webhooks/twilio/status:
+    post:
+      operationId: receiveTwilioStatus
+      tags: [calls]
+      summary: Receive a Twilio call status callback
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
+  /webhooks/calcom:
+    post:
+      operationId: receiveCalcomEvent
+      tags: [appointments]
+      summary: Receive a signed Cal.com booking event
+      responses:
+        "202": { description: Event accepted or already processed }
+        "401": { description: Invalid signature }
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    ReadinessStatus:
+      type: object
+      properties:
+        status: { type: string, enum: [ok] }
+        mode: { type: string, enum: [live, demo] }
+        market: { type: string, enum: [US, IN] }
+        providers:
+          type: object
+          properties:
+            retell: { type: boolean }
+            twilio: { type: boolean }
+            calcom: { type: boolean }
+            intake: { type: boolean }
+          required: [retell, twilio, calcom, intake]
+        auth: { type: string, enum: [clerk, demo, unconfigured] }
+      required: [status, mode, market, providers, auth]
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    LoginInput:
+      type: object
+      properties:
+        email:
+          type: string
+      required: [email]
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [owner, admin, operator] }
+      required: [id, name, email, role]
+    Business:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        market: { type: string, enum: [US, IN] }
+        timezone: { type: string }
+        phone_number: { type: string }
+        transfer_number: { type: string }
+        recording_disclosure: { type: boolean }
+        ai_disclosure: { type: boolean }
+        quiet_hours: { type: string }
+        max_call_attempts: { type: number }
+        suppression_enabled: { type: boolean }
+      required: [id, name, market, timezone, phone_number, transfer_number, recording_disclosure, ai_disclosure, quiet_hours, max_call_attempts, suppression_enabled]
+    AuthSession:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        business: { $ref: "#/components/schemas/Business" }
+      required: [user, business]
+    Score:
+      type: string
+      enum: [hot, warm, cold]
+    Lead:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        phone: { type: string }
+        email: { type: ["string", "null"] }
+        preferred_language: { type: string }
+        source: { type: string }
+        campaign: { type: string }
+        project: { type: string }
+        property_type: { type: string }
+        budget_min: { type: ["number", "null"] }
+        budget_max: { type: ["number", "null"] }
+        budget_label: { type: string }
+        location: { type: string }
+        timeline: { type: string }
+        qualification_status: { type: string }
+        intent_score: { type: number, minimum: 0, maximum: 100 }
+        score: { $ref: "#/components/schemas/Score" }
+        next_action: { type: string }
+        status: { type: string, enum: [new, contacted, qualified, booked, closed, suppressed] }
+        suppressed: { type: boolean }
+        last_call: { type: ["string", "null"] }
+        created_at: { type: string }
+      required: [id, name, phone, email, preferred_language, source, campaign, project, property_type, budget_label, location, timeline, qualification_status, intent_score, score, next_action, status, suppressed, last_call, created_at]
+    LeadUpdate:
+      type: object
+      properties:
+        status: { type: string, enum: [new, contacted, qualified, booked, closed, suppressed] }
+        next_action: { type: string }
+        qualification_status: { type: string }
+    SuppressionInput:
+      type: object
+      properties:
+        reason: { type: string }
+    LeadImportInput:
+      type: object
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeadImportRow"
+      required: [rows]
+    LeadImportRow:
+      type: object
+      properties:
+        name: { type: string }
+        phone: { type: string }
+        email: { type: ["string", "null"] }
+        source: { type: string }
+        campaign: { type: string }
+        project: { type: string }
+        location: { type: string }
+        property_type: { type: string }
+        budget_label: { type: string }
+        timeline: { type: string }
+      required: [name, phone]
+    ImportResult:
+      type: object
+      properties:
+        imported: { type: number }
+        skipped: { type: number }
+        leads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+      required: [imported, skipped, leads]
+    Call:
+      type: object
+      properties:
+        id: { type: string }
+        lead_id: { type: string }
+        lead_name: { type: string }
+        phone: { type: string }
+        provider: { type: string }
+        status: { type: string, enum: [created, policy_blocked, queued, provider_requesting, provider_accepted, in_progress, completed, failed, uncertain] }
+        started_at: { type: ["string", "null"] }
+        ended_at: { type: ["string", "null"] }
+        duration_seconds: { type: ["number", "null"] }
+        summary: { type: string }
+        outcome: { type: string }
+        transferred: { type: boolean }
+        booked: { type: boolean }
+        error_state: { type: ["string", "null"] }
+      required: [id, lead_id, lead_name, phone, provider, status, started_at, ended_at, duration_seconds, summary, outcome, transferred, booked, error_state]
+    StartCallInput:
+      type: object
+      properties:
+        lead_id: { type: string }
+      required: [lead_id]
+    Appointment:
+      type: object
+      properties:
+        id: { type: string }
+        lead_id: { type: string }
+        lead_name: { type: string }
+        service_or_property: { type: string }
+        start_time: { type: string }
+        end_time: { type: string }
+        timezone: { type: string }
+        calendar_provider: { type: string }
+        external_id: { type: string }
+        status: { type: string, enum: [confirmed, cancelled] }
+      required: [id, lead_id, lead_name, service_or_property, start_time, end_time, timezone, calendar_provider, external_id, status]
+    AvailabilityInput:
+      type: object
+      properties:
+        lead_id: { type: string }
+        date: { type: string, format: date }
+      required: [lead_id, date]
+    Slot:
+      type: object
+      properties:
+        start_time: { type: string }
+        end_time: { type: string }
+        label: { type: string }
+      required: [start_time, end_time, label]
+    AppointmentInput:
+      type: object
+      properties:
+        lead_id: { type: string }
+        slot_start: { type: string, format: date-time }
+        slot_end: { type: string, format: date-time }
+      required: [lead_id, slot_start, slot_end]
+    Activity:
+      type: object
+      properties:
+        id: { type: string }
+        type:
+          {
+            type: string,
+            enum: [lead, call, booking, alert, import, intake, message, policy],
+          }
+        title: { type: string }
+        detail: { type: string }
+        created_at: { type: string }
+      required: [id, type, title, detail, created_at]
+    Today:
+      type: object
+      properties:
+        date_label: { type: string }
+        metrics:
+          type: object
+          properties:
+            new_leads: { type: number }
+            calls_in_progress: { type: number }
+            hot_leads: { type: number }
+            appointments_today: { type: number }
+            failed_calls: { type: number }
+            unresolved_messages: { type: number }
+          required: [new_leads, calls_in_progress, hot_leads, appointments_today, failed_calls, unresolved_messages]
+        setup_warnings:
+          type: array
+          items: { type: string }
+        upcoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/Appointment"
+        recent_activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/Activity"
+      required: [date_label, metrics, setup_warnings, upcoming, recent_activity]
+    BusinessSettings:
+      allOf:
+        - $ref: "#/components/schemas/Business"
+        - type: object
+          properties:
+            project_name: { type: string }
+            services_or_property_types: { type: array, items: { type: string } }
+            approved_faq: { type: string }
+            qualification_questions: { type: array, items: { type: string } }
+            escalation_rules: { type: string }
+            cal_event_type_id: { type: ["string", "null"] }
+            retell_agent_id: { type: ["string", "null"] }
+          required: [project_name, services_or_property_types, approved_faq, qualification_questions, escalation_rules, cal_event_type_id, retell_agent_id]
+    BusinessSettingsUpdate:
+      type: object
+      properties:
+        market: { type: string, enum: [US, IN] }
+        timezone: { type: string }
+        transfer_number: { type: string }
+        project_name: { type: string }
+        approved_faq: { type: string }
+        qualification_questions: { type: array, items: { type: string } }
+        recording_disclosure: { type: boolean }
+        ai_disclosure: { type: boolean }
+        quiet_hours: { type: string }
+        max_call_attempts: { type: number, minimum: 1, maximum: 10 }
+    WeeklyReport:
+      type: object
+      properties:
+        period_label: { type: string }
+        leads_received: { type: number }
+        calls_attempted: { type: number }
+        calls_connected: { type: number }
+        qualified_leads: { type: number }
+        appointments_booked: { type: number }
+        transfer_rate: { type: number }
+        failed_actions: { type: number }
+        voice_minutes: { type: number }
+        estimated_provider_cost: { type: number }
+      required: [period_label, leads_received, calls_attempted, calls_connected, qualified_leads, appointments_booked, transfer_rate, failed_actions, voice_minutes, estimated_provider_cost]
+    Usage:
+      type: object
+      properties:
+        period_label: { type: string }
+        voice_minutes: { type: number }
+        included_minutes: { type: number }
+        sms_count: { type: number }
+        booking_count: { type: number }
+        estimated_cost: { type: number }
+      required: [period_label, voice_minutes, included_minutes, sms_count, booking_count, estimated_cost]
+
