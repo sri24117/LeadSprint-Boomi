@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import rateLimit from "express-rate-limit";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import {
@@ -50,7 +51,44 @@ app.use(
   }),
 );
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-app.use(cors());
+
+// --- CORS configuration ---
+// In production: allow only explicitly configured origins (comma-separated).
+// In development: allow localhost / 127.0.0.1 dev servers.
+// Same-origin requests (no Origin header) are always allowed.
+const isProduction = process.env["NODE_ENV"] === "production";
+const configuredOrigins = (process.env["CORS_ALLOWED_ORIGINS"] ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const devOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Server-to-server / same-origin requests have no Origin header — allow.
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      // Explicitly configured origins always pass.
+      if (configuredOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      // In development, allow localhost / 127.0.0.1 on any port.
+      if (!isProduction && devOriginPattern.test(origin)) {
+        callback(null, true);
+        return;
+      }
+      // Reject unconfigured origins.
+      callback(new Error("CORS: origin not allowed"), false);
+    },
+    credentials: true,
+  }),
+);
+
 app.use(express.json({
   verify: (req, _res, buffer) => {
     (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
@@ -64,6 +102,28 @@ app.use(
     },
   }),
 );
+
+// --- Rate limiting: webhooks (120 req/min/IP) ---
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many webhook requests, please try again later" },
+  keyGenerator: (req) => req.ip ?? "unknown",
+});
+app.use("/api/webhooks", webhookLimiter);
+
+// --- Rate limiting: cron (20 req/min/IP) ---
+const cronLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many cron requests, please try again later" },
+  keyGenerator: (req) => req.ip ?? "unknown",
+});
+app.use("/api/cron", cronLimiter);
 
 // NOTE: Clerk's auth middleware is intentionally NOT mounted globally here.
 // It throws synchronously on every request when CLERK_SECRET_KEY isn't
