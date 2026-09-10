@@ -95,7 +95,7 @@ export const callsTable = pgTable("calls", {
   errorState: text("error_state"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  providerCallUnique: uniqueIndex("calls_provider_call_unique").on(table.provider, table.providerCallId),
+  providerCallUnique: uniqueIndex("calls_provider_call_unique").on(table.businessId, table.provider, table.providerCallId),
   idempotencyUnique: uniqueIndex("calls_business_idempotency_unique").on(table.businessId, table.idempotencyKey),
 }));
 

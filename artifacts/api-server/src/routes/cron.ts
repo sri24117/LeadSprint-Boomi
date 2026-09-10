@@ -17,6 +17,7 @@ import {
 import { evaluateCallPolicy } from "../lib/policy";
 import { hasRetellConfigForMarket, startRetellCall } from "../lib/providers";
 import { sendWeeklyReportEmail } from "../lib/mailer";
+import { normalizeToE164 } from "../lib/phone";
 
 const router: IRouter = Router();
 
@@ -133,8 +134,44 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
       continue;
     }
 
+    const phoneNorm = normalizeToE164(contact?.phone);
+    if (!phoneNorm.valid) {
+      blocked += 1;
+      const errorMsg = `Invalid contact phone number: ${phoneNorm.error}`;
+      await db
+        .update(callsTable)
+        .set({
+          status: "policy_blocked",
+          outcome: "Blocked — invalid phone number",
+          summary: errorMsg,
+          errorState: "invalid_phone",
+        })
+        .where(eq(callsTable.id, call.id));
+      await db
+        .update(workflowJobsTable)
+        .set({
+          status: "failed",
+          attempts: job.attempts + 1,
+          lastError: errorMsg,
+        })
+        .where(eq(workflowJobsTable.id, job.id));
+      await db.insert(activitiesTable).values({
+        id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+        businessId: job.businessId,
+        type: "policy",
+        title: "Call blocked — invalid phone number",
+        detail: `Cannot place queued call to ${contact?.name ?? "contact"}: ${phoneNorm.error} (raw: "${contact?.phone ?? ""}")`,
+      });
+      continue;
+    }
+
     try {
-      const live = await startRetellCall({ toNumber: contact?.phone ?? "", market, metadata: { business_id: job.businessId, lead_id: call.leadId, call_id: call.id } });
+      const live = await startRetellCall({
+        toNumber: phoneNorm.e164,
+        market,
+        agentId: business?.retellAgentId ?? undefined,
+        metadata: { business_id: job.businessId, lead_id: call.leadId, call_id: call.id },
+      });
       started += 1;
       await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(eq(callsTable.id, call.id));
       await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));

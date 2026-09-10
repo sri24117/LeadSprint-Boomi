@@ -16,8 +16,43 @@ import {
   verifyTwilioSignature,
   verifyWebhookSignature,
 } from "../lib/providers";
+import { normalizeToE164 } from "../lib/phone";
 
 const router: IRouter = Router();
+
+const MAX_WEBHOOK_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+function verifyTimestampFreshness(
+  timestampValue: string | number | undefined | null,
+  maxAgeMs = MAX_WEBHOOK_AGE_MS,
+): { valid: boolean; reason?: string } {
+  if (timestampValue === undefined || timestampValue === null || timestampValue === "") {
+    return { valid: true };
+  }
+
+  let tsMs: number;
+  if (typeof timestampValue === "number") {
+    tsMs = timestampValue < 10000000000 ? timestampValue * 1000 : timestampValue;
+  } else {
+    const parsed = Date.parse(timestampValue);
+    if (isNaN(parsed)) {
+      const num = Number(timestampValue);
+      if (!isNaN(num)) {
+        tsMs = num < 10000000000 ? num * 1000 : num;
+      } else {
+        return { valid: false, reason: "Unparseable timestamp string" };
+      }
+    } else {
+      tsMs = parsed;
+    }
+  }
+
+  const ageMs = Math.abs(Date.now() - tsMs);
+  if (ageMs > maxAgeMs) {
+    return { valid: false, reason: `Timestamp outside freshness window (${Math.round(ageMs / 1000)}s old)` };
+  }
+  return { valid: true };
+}
 
 function rawBody(req: Request): Buffer {
   return (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
@@ -75,45 +110,74 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Invalid intake signature" });
     return;
   }
+
   const body = req.body as Record<string, unknown>;
+  const tsCandidate = body.timestamp ?? body.created_at ?? req.get("x-timestamp");
+  const freshness = verifyTimestampFreshness(tsCandidate as string | number | undefined);
+  if (!freshness.valid) {
+    res.status(400).json({ error: `Stale webhook: ${freshness.reason}` });
+    return;
+  }
+
   const businessId = typeof body.business_id === "string" ? body.business_id : "";
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
-  if (!businessId || !name || !phone) {
+  const rawPhone = typeof body.phone === "string" ? body.phone.trim() : "";
+  if (!businessId || !name || !rawPhone) {
     res.status(400).json({ error: "business_id, name, and phone are required" });
     return;
   }
+
+  const normalizedPhone = normalizeToE164(rawPhone);
+  if (!normalizedPhone.valid) {
+    res.status(400).json({ error: `Invalid phone number: ${normalizedPhone.error}` });
+    return;
+  }
+  const phone = normalizedPhone.e164;
+
   const [business] = await db.select({ id: businessesTable.id }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
   if (!business) {
     res.status(404).json({ error: "Business not found" });
     return;
   }
-  const [existing] = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), eq(contactsTable.phone, phone))).limit(1);
-  if (existing) {
-    res.status(200).json({ accepted: false, reason: "duplicate" });
+
+  let result: { accepted: boolean; reason?: string; lead_id?: string } = { accepted: false };
+
+  await db.transaction(async (tx) => {
+    const [existing] = await tx.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), eq(contactsTable.phone, phone))).limit(1);
+    if (existing) {
+      result = { accepted: false, reason: "duplicate" };
+      return;
+    }
+
+    const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
+    const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
+    await tx.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null });
+    await tx.insert(leadsTable).values({
+      id: leadId,
+      businessId,
+      contactId,
+      source: typeof body.source === "string" ? body.source : "webhook",
+      campaign: typeof body.campaign === "string" ? body.campaign : "Inbound enquiry",
+      project: typeof body.project === "string" ? body.project : "Configured project",
+      propertyType: typeof body.property_type === "string" ? body.property_type : "Not specified",
+      budgetLabel: typeof body.budget_label === "string" ? body.budget_label : "Not specified",
+      location: typeof body.location === "string" ? body.location : "Not specified",
+      timeline: typeof body.timeline === "string" ? body.timeline : "Not specified",
+      intentScore: 50,
+      score: "warm",
+      status: "new",
+      nextAction: "Call lead",
+    });
+    await tx.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: "Authenticated intake webhook accepted" });
+    result = { accepted: true, lead_id: leadId };
+  });
+
+  if (!result.accepted && result.reason === "duplicate") {
+    res.status(200).json(result);
     return;
   }
-  const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
-  const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null });
-  await db.insert(leadsTable).values({
-    id: leadId,
-    businessId,
-    contactId,
-    source: typeof body.source === "string" ? body.source : "webhook",
-    campaign: typeof body.campaign === "string" ? body.campaign : "Inbound enquiry",
-    project: typeof body.project === "string" ? body.project : "Configured project",
-    propertyType: typeof body.property_type === "string" ? body.property_type : "Not specified",
-    budgetLabel: typeof body.budget_label === "string" ? body.budget_label : "Not specified",
-    location: typeof body.location === "string" ? body.location : "Not specified",
-    timeline: typeof body.timeline === "string" ? body.timeline : "Not specified",
-    intentScore: 50,
-    score: "warm",
-    status: "new",
-    nextAction: "Call lead",
-  });
-  await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: "Authenticated intake webhook accepted" });
-  res.status(201).json({ accepted: true, lead_id: leadId });
+
+  res.status(201).json(result);
 });
 
 router.post("/webhooks/retell", async (req, res): Promise<void> => {
@@ -122,7 +186,15 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Invalid Retell signature" });
     return;
   }
+
   const body = req.body as Record<string, unknown>;
+  const tsCandidate = body.event_timestamp ?? body.timestamp ?? req.get("x-timestamp");
+  const freshness = verifyTimestampFreshness(tsCandidate as string | number | undefined);
+  if (!freshness.valid) {
+    res.status(400).json({ error: `Stale webhook: ${freshness.reason}` });
+    return;
+  }
+
   const callId = typeof body.call_id === "string" ? body.call_id : typeof body.callId === "string" ? body.callId : "";
   const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
   const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
@@ -137,11 +209,6 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     const duration = typeof body.duration_ms === "number" ? Math.round(body.duration_ms / 1000) : null;
     const disconnectionReason = typeof body.disconnection_reason === "string" ? body.disconnection_reason : undefined;
 
-    // A transfer was attempted if the agent's tool call requested one; Retell
-    // reports the outcome either as an explicit boolean or via disconnection
-    // reason. Treat ambiguous/failed transfer outcomes as "transfer failed",
-    // never as a silent success — per the safety rule that a failed transfer
-    // must become a message capture rather than disappear.
     const transferAttempted = body.transfer_attempted === true || typeof body.transfer_to_number === "string";
     const transferSucceeded = body.transferred === true || body.transfer_successful === true;
     const failedTransferReasons = ["dial_failed", "dial_no_answer", "dial_busy", "voicemail_reached", "transfer_failed"];
@@ -170,9 +237,6 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     }
 
     if (transferFailed && callRow) {
-      // Never expose the failure to the caller or silently drop it: log an
-      // operator-visible activity and flip the lead to a manual follow-up
-      // state so someone calls the person back.
       await db.insert(activitiesTable).values({
         id: `activity_${crypto.randomUUID().slice(0, 12)}`,
         businessId,
@@ -202,7 +266,15 @@ router.post("/webhooks/twilio/status", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Invalid Twilio signature" });
     return;
   }
+
   const body = req.body as Record<string, unknown>;
+  const tsCandidate = body.Timestamp ?? req.get("x-twilio-timestamp");
+  const freshness = verifyTimestampFreshness(tsCandidate as string | number | undefined);
+  if (!freshness.valid) {
+    res.status(400).json({ error: `Stale webhook: ${freshness.reason}` });
+    return;
+  }
+
   const callId = typeof body.CallSid === "string" ? body.CallSid : "";
   const [callRow] = callId
     ? await db.select({ businessId: callsTable.businessId }).from(callsTable).where(eq(callsTable.providerCallId, callId)).limit(1)
@@ -231,7 +303,16 @@ router.post("/webhooks/calcom", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Invalid Cal.com signature" });
     return;
   }
+
   const body = req.body as Record<string, unknown>;
+  const payload = (body.payload && typeof body.payload === "object" ? body.payload : {}) as Record<string, unknown>;
+  const tsCandidate = body.createdAt ?? payload.createdAt ?? req.get("x-timestamp");
+  const freshness = verifyTimestampFreshness(tsCandidate as string | number | undefined);
+  if (!freshness.valid) {
+    res.status(400).json({ error: `Stale webhook: ${freshness.reason}` });
+    return;
+  }
+
   const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
   const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
   if (!businessId) {

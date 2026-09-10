@@ -60,6 +60,7 @@ import {
 } from "../lib/providers";
 import { evaluateCallPolicy } from "../lib/policy";
 import { logger } from "../lib/logger";
+import { normalizeToE164 } from "../lib/phone";
 
 const router: IRouter = Router();
 const BUSINESS_ID = "business_demo";
@@ -78,11 +79,25 @@ function iso(value: Date | null): string | null {
   return value?.toISOString() ?? null;
 }
 
-function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
-  return req.leadSprintBusinessId ?? BUSINESS_ID;
+export function isDemoAuthEnabled(): boolean {
+  const demoRequested = process.env["LEADSPRINT_DEMO_AUTH"]?.trim().toLowerCase() === "true";
+  return demoRequested && process.env["NODE_ENV"] !== "production";
 }
 
-async function ensureSeedData(): Promise<void> {
+function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
+  if (req.leadSprintBusinessId) {
+    return req.leadSprintBusinessId;
+  }
+  if (isDemoAuthEnabled()) {
+    return BUSINESS_ID;
+  }
+  throw new Error("Missing business scope on authenticated request");
+}
+
+export async function ensureSeedData(): Promise<void> {
+  if (!isDemoAuthEnabled()) {
+    return;
+  }
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
   if (!business) {
     await db.insert(businessesTable).values({
@@ -113,15 +128,6 @@ async function ensureSeedData(): Promise<void> {
     });
   }
 }
-
-// Fire-and-forget at boot so the demo workspace exists before the first
-// request. A rejected promise here (database not reachable yet) must not
-// become an unhandled rejection that takes the whole process down — the
-// health endpoints and webhooks are supposed to stay up, and the seed is
-// retried by the first /auth/me request anyway.
-void ensureSeedData().catch((err) => {
-  logger.error({ err }, "Demo seed data could not be created");
-});
 
 async function getBusiness(businessId = BUSINESS_ID) {
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
@@ -252,9 +258,13 @@ router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
   if (!params.success || !body.success) { res.status(400).json({ error: "Invalid suppression request" }); return; }
   const [row] = await db.select({ contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, params.data.id), eq(leadsTable.businessId, BUSINESS_ID)));
   if (!row) { res.status(404).json({ error: "Lead not found" }); return; }
-  await db.update(contactsTable).set({ suppressedAt: new Date(), consentStatus: "suppressed" }).where(eq(contactsTable.id, row.contact.id));
-  await db.update(leadsTable).set({ status: "suppressed", nextAction: "No further calls", updatedAt: new Date() }).where(eq(leadsTable.id, params.data.id));
-  await db.insert(suppressionsTable).values({ id: id("suppression"), businessId: BUSINESS_ID, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator" });
+
+  await db.transaction(async (tx) => {
+    await tx.update(contactsTable).set({ suppressedAt: new Date(), consentStatus: "suppressed" }).where(eq(contactsTable.id, row.contact.id));
+    await tx.update(leadsTable).set({ status: "suppressed", nextAction: "No further calls", updatedAt: new Date() }).where(eq(leadsTable.id, params.data.id));
+    await tx.insert(suppressionsTable).values({ id: id("suppression"), businessId: BUSINESS_ID, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator" });
+  });
+
   const lead = await getLeadDto(params.data.id, BUSINESS_ID);
   res.json(SuppressLeadResponse.parse(lead));
 });
@@ -266,12 +276,21 @@ router.post("/leads/import", async (req, res): Promise<void> => {
   let imported = 0;
   let skipped = 0;
   for (const row of body.data.rows) {
-    const existing = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, BUSINESS_ID), eq(contactsTable.phone, row.phone))).limit(1);
+    const phoneNorm = normalizeToE164(row.phone);
+    if (!phoneNorm.valid) {
+      skipped += 1;
+      continue;
+    }
+    const phone = phoneNorm.e164;
+    const existing = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, BUSINESS_ID), eq(contactsTable.phone, phone))).limit(1);
     if (existing[0]) { skipped += 1; continue; }
+
     const contactId = id("contact");
     const leadId = id("lead");
-    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null });
-    await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
+    await db.transaction(async (tx) => {
+      await tx.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone, email: row.email ?? null });
+      await tx.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
+    });
     imported += 1;
   }
   await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "import", title: `${imported} leads imported`, detail: "CSV import completed with duplicate checks" });
@@ -332,14 +351,21 @@ router.post("/calls/start", async (req, res): Promise<void> => {
     return;
   }
 
+  const normalizedLeadPhone = normalizeToE164(lead.phone);
+  if (!normalizedLeadPhone.valid) {
+    res.status(400).json({ error: `Cannot place call: Lead phone number (${lead.phone}) is invalid: ${normalizedLeadPhone.error}` });
+    return;
+  }
+
   const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
   let current = created;
   const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US");
   if (liveRetell) {
     try {
       const live = await startRetellCall({
-        toNumber: lead.phone,
+        toNumber: normalizedLeadPhone.e164,
         market: business?.market === "IN" ? "IN" : "US",
+        agentId: business?.retellAgentId ?? undefined,
         metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id, call_id: callId },
       });
       [current] = await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
@@ -400,9 +426,30 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const [lead] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  // 1. Guard against duplicate bookings: If the lead already has a confirmed appointment, return it immediately
+  const [existingConfirmed] = await db
+    .select()
+    .from(appointmentsTable)
+    .where(
+      and(
+        eq(appointmentsTable.businessId, BUSINESS_ID),
+        eq(appointmentsTable.leadId, body.data.lead_id),
+        eq(appointmentsTable.status, "confirmed"),
+      ),
+    )
+    .limit(1);
+
+  if (existingConfirmed) {
+    res.json(BookAppointmentResponse.parse(await getAppointmentDto(existingConfirmed, BUSINESS_ID)));
+    return;
+  }
+
   const business = await getBusiness(BUSINESS_ID);
   const appointmentId = id("appointment");
+  const operationKey = `book_${BUSINESS_ID}_${body.data.lead_id}_${body.data.slot_start.getTime()}`;
   let externalId = `cal_${appointmentId}`;
+
   if (hasCalConfig()) {
     try {
       const booking = await createCalBooking({
@@ -410,7 +457,11 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
         end: body.data.slot_end.toISOString(),
         timeZone: business?.timezone ?? "UTC",
         attendee: { name: lead.contact.name, email: lead.contact.email ?? `${lead.contact.id}@lead.local`, phone: lead.contact.phone },
-        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id },
+        metadata: {
+          business_id: BUSINESS_ID,
+          lead_id: body.data.lead_id,
+          operation_key: operationKey,
+        },
       });
       externalId = booking.bookingId;
     } catch (error) {
@@ -420,12 +471,114 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
       return;
     }
   }
-  const [created] = await db.insert(appointmentsTable).values({ id: appointmentId, businessId: BUSINESS_ID, contactId: lead.contact.id, leadId: body.data.lead_id, serviceOrProperty: business?.projectName ?? "Configured appointment", startTime: new Date(body.data.slot_start), endTime: new Date(body.data.slot_end), timezone: business?.timezone ?? "UTC", externalId }).returning();
-  await db.update(leadsTable).set({ status: "booked", nextAction: "Appointment confirmed", updatedAt: new Date() }).where(eq(leadsTable.id, body.data.lead_id));
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "booking", title: `Appointment booked for ${lead.contact.name}`, detail: "Cal.com verification complete" });
-  const usage = await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)).limit(1);
-  if (usage[0]) await db.update(usageTable).set({ bookingCount: sql`${usageTable.bookingCount} + 1` }).where(and(eq(usageTable.id, usage[0].id), eq(usageTable.businessId, BUSINESS_ID)));
-  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(created, BUSINESS_ID)));
+
+  // 2. If an appointment row already exists for this calendar provider + externalId (retry case), return it
+  const [existingByExternal] = await db
+    .select()
+    .from(appointmentsTable)
+    .where(
+      and(
+        eq(appointmentsTable.businessId, BUSINESS_ID),
+        eq(appointmentsTable.calendarProvider, "Cal.com"),
+        eq(appointmentsTable.externalId, externalId),
+      ),
+    )
+    .limit(1);
+
+  if (existingByExternal) {
+    res.json(BookAppointmentResponse.parse(await getAppointmentDto(existingByExternal, BUSINESS_ID)));
+    return;
+  }
+
+  // 3. Persist locally within a database transaction
+  let appointmentRow: typeof appointmentsTable.$inferSelect | undefined;
+  try {
+    await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(appointmentsTable)
+        .values({
+          id: appointmentId,
+          businessId: BUSINESS_ID,
+          contactId: lead.contact.id,
+          leadId: body.data.lead_id,
+          serviceOrProperty: business?.projectName ?? "Configured appointment",
+          startTime: new Date(body.data.slot_start),
+          endTime: new Date(body.data.slot_end),
+          timezone: business?.timezone ?? "UTC",
+          externalId,
+        })
+        .onConflictDoNothing({
+          target: [
+            appointmentsTable.calendarProvider,
+            appointmentsTable.externalId,
+          ],
+        })
+        .returning();
+
+      if (created) {
+        appointmentRow = created;
+      } else {
+        const [reFetched] = await tx
+          .select()
+          .from(appointmentsTable)
+          .where(
+            and(
+              eq(appointmentsTable.calendarProvider, "Cal.com"),
+              eq(appointmentsTable.externalId, externalId),
+            ),
+          )
+          .limit(1);
+        appointmentRow = reFetched;
+      }
+
+      await tx
+        .update(leadsTable)
+        .set({ status: "booked", nextAction: "Appointment confirmed", updatedAt: new Date() })
+        .where(eq(leadsTable.id, body.data.lead_id));
+
+      await tx.insert(activitiesTable).values({
+        id: id("activity"),
+        businessId: BUSINESS_ID,
+        type: "booking",
+        title: `Appointment booked for ${lead.contact.name}`,
+        detail: "Cal.com verification complete",
+      });
+
+      const usage = await tx
+        .select()
+        .from(usageTable)
+        .where(eq(usageTable.businessId, BUSINESS_ID))
+        .limit(1);
+      if (usage[0]) {
+        await tx
+          .update(usageTable)
+          .set({ bookingCount: sql`${usageTable.bookingCount} + 1` })
+          .where(and(eq(usageTable.id, usage[0].id), eq(usageTable.businessId, BUSINESS_ID)));
+      }
+    });
+  } catch (dbError) {
+    req.log.error(
+      {
+        err: dbError,
+        leadId: body.data.lead_id,
+        externalId,
+        businessId: BUSINESS_ID,
+      },
+      "CRITICAL: Cal.com booking succeeded on provider but local database persistence failed. Manual reconciliation required.",
+    );
+    res.status(500).json({
+      error: "Booking confirmed with calendar provider but local database persistence failed",
+      detail: `Provider booking ID: ${externalId}. Contact support or retry to reconcile.`,
+    });
+    return;
+  }
+
+  if (!appointmentRow) {
+    res.status(500).json({ error: "Failed to persist appointment record" });
+    return;
+  }
+
+  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(appointmentRow, BUSINESS_ID)));
 });
 
 router.get("/business-settings", async (_req, res): Promise<void> => {

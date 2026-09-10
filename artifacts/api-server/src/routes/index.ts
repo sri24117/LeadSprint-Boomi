@@ -5,6 +5,7 @@ import healthRouter from "./health";
 import leadsprintRouter, {
   DEMO_BUSINESS_ID,
   DEMO_USER_ID,
+  ensureSeedData,
 } from "./leadsprint";
 import webhooksRouter from "./webhooks";
 import cronRouter from "./cron";
@@ -51,6 +52,9 @@ if (demoAuthEnabled) {
     "LEADSPRINT_DEMO_AUTH is enabled: the operator console API is UNAUTHENTICATED " +
       "and every request is treated as the seeded demo operator. Local use only.",
   );
+  void ensureSeedData().catch((err) => {
+    logger.error({ err }, "Demo seed data could not be created");
+  });
   router.use((req, _res, next) => {
     req.leadSprintUserId = DEMO_USER_ID;
     req.leadSprintBusinessId = DEMO_BUSINESS_ID;

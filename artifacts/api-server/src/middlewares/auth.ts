@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { getAuth } from "@clerk/express";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, businessesTable, usersTable, usageTable } from "@workspace/db";
 
 declare global {
@@ -45,44 +45,74 @@ export async function requireAuth(
     email.split("@")[0] ??
     "Operator";
 
-  let [user] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.id, userId))
-    .limit(1);
+  let user: typeof usersTable.$inferSelect | undefined;
 
-  if (!user) {
-    const businessId = `business_${userId}`;
-    const [business] = await db
-      .insert(businessesTable)
-      .values({
-        id: businessId,
-        name: "New LeadSprint workspace",
-        market: "US",
-        timezone: "America/New_York",
-        phoneNumber: "",
-        transferNumber: "",
-        projectName: "Configure your first campaign",
-        approvedFaq: "",
-        qualificationQuestions: [],
-        escalationRules:
-          "Transfer questions outside approved business information to a human.",
-      })
-      .onConflictDoNothing()
-      .returning();
-
-    if (!business) {
-      [user] = await db
+  try {
+    await db.transaction(async (tx) => {
+      const [existingUser] = await tx
         .select()
         .from(usersTable)
-        .where(and(eq(usersTable.id, userId), eq(usersTable.businessId, businessId)))
+        .where(eq(usersTable.id, userId))
         .limit(1);
-    } else {
-      [user] = await db
+
+      if (existingUser) {
+        const [updated] = await tx
+          .update(usersTable)
+          .set({ lastLoginAt: new Date(), name, email })
+          .where(eq(usersTable.id, userId))
+          .returning();
+        user = updated ?? existingUser;
+        return;
+      }
+
+      const businessId = `business_${userId}`;
+
+      let [business] = await tx
+        .select()
+        .from(businessesTable)
+        .where(eq(businessesTable.id, businessId))
+        .limit(1);
+
+      if (!business) {
+        const [insertedBusiness] = await tx
+          .insert(businessesTable)
+          .values({
+            id: businessId,
+            name: "New LeadSprint workspace",
+            market: "US",
+            timezone: "America/New_York",
+            phoneNumber: "",
+            transferNumber: "",
+            projectName: "Configure your first campaign",
+            approvedFaq: "",
+            qualificationQuestions: [],
+            escalationRules:
+              "Transfer questions outside approved business information to a human.",
+          })
+          .onConflictDoNothing()
+          .returning();
+
+        business = insertedBusiness;
+
+        if (!business) {
+          const [reFetched] = await tx
+            .select()
+            .from(businessesTable)
+            .where(eq(businessesTable.id, businessId))
+            .limit(1);
+          business = reFetched;
+        }
+      }
+
+      if (!business) {
+        throw new Error(`Failed to provision business workspace for ${userId}`);
+      }
+
+      const [insertedUser] = await tx
         .insert(usersTable)
         .values({
           id: userId,
-          businessId,
+          businessId: business.id,
           name,
           email,
           role: "owner",
@@ -90,23 +120,31 @@ export async function requireAuth(
         })
         .onConflictDoNothing()
         .returning();
+
+      if (insertedUser) {
+        user = insertedUser;
+      } else {
+        const [reFetchedUser] = await tx
+          .select()
+          .from(usersTable)
+          .where(eq(usersTable.id, userId))
+          .limit(1);
+        user = reFetchedUser;
+      }
+
       const now = new Date();
-      await db
+      await tx
         .insert(usageTable)
         .values({
           id: `usage_${businessId}`,
-          businessId,
+          businessId: business.id,
           periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
           periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
         })
         .onConflictDoNothing();
-    }
-  } else {
-    [user] = await db
-      .update(usersTable)
-      .set({ lastLoginAt: new Date(), name, email })
-      .where(eq(usersTable.id, userId))
-      .returning();
+    });
+  } catch (err) {
+    req.log?.error({ err }, "Error provisioning user workspace in requireAuth");
   }
 
   if (!user) {

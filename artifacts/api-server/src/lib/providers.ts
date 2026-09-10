@@ -93,6 +93,7 @@ async function parseProviderResponse<T>(
 export async function startRetellCall(input: {
   toNumber: string;
   market: "US" | "IN";
+  agentId?: string;
   metadata: Record<string, string>;
 }): Promise<{ callId: string }> {
   const config = providerConfig().retell;
@@ -100,9 +101,10 @@ export async function startRetellCall(input: {
     input.market === "IN"
       ? config.fromNumberIN ?? config.fromNumber
       : config.fromNumberUS ?? config.fromNumber;
+  const agentId = input.agentId?.trim() || config.agentId;
   const values = requireValues("Retell", {
     apiKey: config.apiKey,
-    agentId: config.agentId,
+    agentId,
     fromNumber,
   });
   const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
@@ -231,9 +233,10 @@ export async function createCalBooking(input: {
   });
   const body = await parseProviderResponse<{
     id?: string | number;
-    booking?: { id?: string | number };
+    uid?: string;
+    booking?: { id?: string | number; uid?: string };
   }>(response, "Cal.com");
-  const bookingId = body?.id ?? body?.booking?.id;
+  const bookingId = body?.uid ?? body?.booking?.uid ?? body?.id ?? body?.booking?.id;
   if (bookingId == null) throw new ProviderRequestError("Cal.com did not return a booking id");
   return { bookingId: String(bookingId) };
 }
