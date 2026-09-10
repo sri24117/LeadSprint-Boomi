@@ -15,6 +15,13 @@
       "when": 1789025600000,
       "tag": "0001_scope_calls_provider_call_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789026000000,
+      "tag": "0002_usage_and_billing_period",
+      "breakpoints": true
     }
   ]
 }

@@ -61,6 +61,7 @@ import {
 import { evaluateCallPolicy } from "../lib/policy";
 import { logger } from "../lib/logger";
 import { normalizeToE164 } from "../lib/phone";
+import { getActiveUsageRow, getBillingPeriod } from "../lib/usage";
 
 const router: IRouter = Router();
 const BUSINESS_ID = "business_demo";
@@ -114,6 +115,7 @@ export async function ensureSeedData(): Promise<void> {
       escalationRules: "Do not answer legal, lending, appraisal, fair-housing, or availability questions outside approved information. Transfer or take a message.",
       calEventTypeId: "cal_demo_showing",
       retellAgentId: "retell_demo_agent",
+      includedVoiceMinutes: 300,
     });
   }
 
@@ -544,17 +546,11 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
         detail: "Cal.com verification complete",
       });
 
-      const usage = await tx
-        .select()
-        .from(usageTable)
-        .where(eq(usageTable.businessId, BUSINESS_ID))
-        .limit(1);
-      if (usage[0]) {
-        await tx
-          .update(usageTable)
-          .set({ bookingCount: sql`${usageTable.bookingCount} + 1` })
-          .where(and(eq(usageTable.id, usage[0].id), eq(usageTable.businessId, BUSINESS_ID)));
-      }
+      const activeUsage = await getActiveUsageRow(BUSINESS_ID, new Date(), tx);
+      await tx
+        .update(usageTable)
+        .set({ bookingCount: sql`${usageTable.bookingCount} + 1` })
+        .where(eq(usageTable.id, activeUsage.id));
     });
   } catch (dbError) {
     req.log.error(
@@ -648,15 +644,35 @@ router.get("/reports/weekly", async (_req, res): Promise<void> => {
   const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
   const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
   const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, BUSINESS_ID));
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
-  res.json(GetWeeklyReportResponse.parse({ period_label: "This week · pilot report", leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: Number(usage?.voiceMinutes ?? 0), estimated_provider_cost: Number(usage?.estimatedCost ?? 0) }));
+  const usage = await getActiveUsageRow(BUSINESS_ID);
+  res.json(GetWeeklyReportResponse.parse({
+    period_label: "This week · pilot report",
+    leads_received: leads.length,
+    calls_attempted: calls.length,
+    calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length,
+    qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length,
+    appointments_booked: appointments.length,
+    transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0,
+    failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length,
+    voice_minutes: Number(usage.voiceMinutes),
+    estimated_provider_cost: Number(usage.estimatedCost),
+  }));
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
-  res.json(GetUsageResponse.parse({ period_label: "September 2026", voice_minutes: Number(usage?.voiceMinutes ?? 0), included_minutes: 300, sms_count: usage?.smsCount ?? 0, booking_count: usage?.bookingCount ?? 0, estimated_cost: Number(usage?.estimatedCost ?? 0) }));
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID)).limit(1);
+  const usage = await getActiveUsageRow(BUSINESS_ID);
+  const { periodLabel } = getBillingPeriod();
+  res.json(GetUsageResponse.parse({
+    period_label: periodLabel,
+    voice_minutes: Number(usage.voiceMinutes),
+    included_minutes: business?.includedVoiceMinutes ?? 300,
+    sms_count: usage.smsCount,
+    booking_count: usage.bookingCount,
+    estimated_cost: Number(usage.estimatedCost),
+  }));
 });
 
 export default router;

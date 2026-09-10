@@ -18,6 +18,7 @@ import { evaluateCallPolicy } from "../lib/policy";
 import { hasRetellConfigForMarket, startRetellCall } from "../lib/providers";
 import { sendWeeklyReportEmail } from "../lib/mailer";
 import { normalizeToE164 } from "../lib/phone";
+import { getActiveUsageRow } from "../lib/usage";
 
 const router: IRouter = Router();
 
@@ -218,7 +219,7 @@ router.post("/cron/weekly-report", async (req, res): Promise<void> => {
     const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, business.id));
     const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, business.id));
     const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, business.id));
-    const [usage] = await db.select().from(usageTable).where(eq(usageTable.businessId, business.id));
+    const usage = await getActiveUsageRow(business.id);
 
     const delivered = await sendWeeklyReportEmail({
       to: owner.email,

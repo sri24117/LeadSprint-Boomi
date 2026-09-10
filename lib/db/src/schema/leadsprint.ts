@@ -30,6 +30,7 @@ export const businessesTable = pgTable("businesses", {
   escalationRules: text("escalation_rules").notNull().default("Transfer questions outside approved business information to a human."),
   calEventTypeId: text("cal_event_type_id"),
   retellAgentId: text("retell_agent_id"),
+  includedVoiceMinutes: integer("included_voice_minutes").notNull().default(300),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
@@ -134,7 +135,9 @@ export const usageTable = pgTable("usage", {
   smsCount: integer("sms_count").notNull().default(0),
   bookingCount: integer("booking_count").notNull().default(0),
   estimatedCost: numeric("estimated_cost").notNull().default("0"),
-});
+}, (table) => ({
+  businessPeriodUnique: uniqueIndex("usage_business_period_unique").on(table.businessId, table.periodStart, table.periodEnd),
+}));
 
 export const suppressionsTable = pgTable("suppressions", {
   id: text("id").primaryKey(),

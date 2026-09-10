@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getAuth } from "@clerk/express";
 import { eq } from "drizzle-orm";
 import { db, businessesTable, usersTable, usageTable } from "@workspace/db";
+import { getActiveUsageRow } from "../lib/usage";
 
 declare global {
   namespace Express {
@@ -133,15 +134,7 @@ export async function requireAuth(
       }
 
       const now = new Date();
-      await tx
-        .insert(usageTable)
-        .values({
-          id: `usage_${businessId}`,
-          businessId: business.id,
-          periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
-          periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
-        })
-        .onConflictDoNothing();
+      await getActiveUsageRow(business.id, now, tx);
     });
   } catch (err) {
     req.log?.error({ err }, "Error provisioning user workspace in requireAuth");

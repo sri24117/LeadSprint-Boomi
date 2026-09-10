@@ -17,6 +17,7 @@ import {
   verifyWebhookSignature,
 } from "../lib/providers";
 import { normalizeToE164 } from "../lib/phone";
+import { getActiveUsageRow } from "../lib/usage";
 
 const router: IRouter = Router();
 
@@ -230,10 +231,11 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
 
     if (duration != null) {
+      const activeUsage = await getActiveUsageRow(businessId, new Date(), db);
       await db.update(usageTable).set({
         voiceMinutes: sql`${usageTable.voiceMinutes} + ${duration / 60}`,
         estimatedCost: sql`${usageTable.estimatedCost} + ${(duration / 60) * 0.12}`,
-      }).where(eq(usageTable.businessId, businessId));
+      }).where(eq(usageTable.id, activeUsage.id));
     }
 
     if (transferFailed && callRow) {
