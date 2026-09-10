@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   numeric,
@@ -157,9 +158,13 @@ export const workflowJobsTable = pgTable("workflow_jobs", {
   attempts: integer("attempts").notNull().default(0),
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
   lockedAt: timestamp("locked_at", { withTimezone: true }),
+  lockedBy: text("locked_by"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
   lastError: text("last_error"),
 }, (table) => ({
   jobIdempotencyUnique: uniqueIndex("workflow_jobs_business_idempotency_unique").on(table.businessId, table.idempotencyKey),
+  pollIdx: index("workflow_jobs_poll_idx").on(table.type, table.status, table.availableAt),
+  leaseIdx: index("workflow_jobs_lease_idx").on(table.status, table.lockedAt),
 }));
 
 export const providerEventsTable = pgTable("provider_events", {

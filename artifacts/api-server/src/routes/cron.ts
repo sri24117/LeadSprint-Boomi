@@ -19,6 +19,7 @@ import { hasRetellConfigForMarket, startRetellCall } from "../lib/providers";
 import { sendWeeklyReportEmail } from "../lib/mailer";
 import { normalizeToE164 } from "../lib/phone";
 import { getActiveUsageRow } from "../lib/usage";
+import { processWorkflowJobs } from "../lib/worker";
 
 const router: IRouter = Router();
 
@@ -78,119 +79,8 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
     return;
   }
 
-  const MAX_JOB_ATTEMPTS = 5;
-  const now = new Date();
-  const jobs = await db
-    .select()
-    .from(workflowJobsTable)
-    .where(and(eq(workflowJobsTable.type, "initiate_call"), eq(workflowJobsTable.status, "queued"), lte(workflowJobsTable.availableAt, now)))
-    .orderBy(asc(workflowJobsTable.availableAt))
-    .limit(25);
-
-  let attempted = 0;
-  let started = 0;
-  let blocked = 0;
-  let skippedNotConfigured = 0;
-  let failed = 0;
-
-  for (const job of jobs) {
-    const [call] = await db.select().from(callsTable).where(and(eq(callsTable.id, job.idempotencyKey), eq(callsTable.businessId, job.businessId)));
-    if (!call || call.status !== "queued") {
-      // Already handled through another path (manual retry, webhook, etc).
-      await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-      continue;
-    }
-
-    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, job.businessId));
-    const market = business?.market === "IN" ? "IN" : "US";
-    if (!hasRetellConfigForMarket(market)) {
-      skippedNotConfigured += 1;
-      continue; // leave queued; no credentials yet, don't burn an attempt
-    }
-
-    attempted += 1;
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, call.contactId));
-    const priorAttempts = (
-      await db.select({ id: callsTable.id }).from(callsTable).where(
-        and(eq(callsTable.leadId, call.leadId), eq(callsTable.businessId, job.businessId), ne(callsTable.id, call.id)),
-      )
-    ).length;
-
-    const decision = evaluateCallPolicy({
-      business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-      contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null },
-      attemptsSoFar: priorAttempts,
-    });
-
-    if (!decision.allowed) {
-      blocked += 1;
-      await db.update(callsTable).set({ status: "policy_blocked", outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason }).where(eq(callsTable.id, call.id));
-      const nextAttempts = job.attempts + 1;
-      if (decision.reason === "quiet_hours" && nextAttempts < MAX_JOB_ATTEMPTS) {
-        // Quiet hours resolve themselves with time — worth another look later.
-        await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 30 * 60 * 1000), lastError: decision.message }).where(eq(workflowJobsTable.id, job.id));
-      } else {
-        await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: decision.message }).where(eq(workflowJobsTable.id, job.id));
-      }
-      continue;
-    }
-
-    const phoneNorm = normalizeToE164(contact?.phone);
-    if (!phoneNorm.valid) {
-      blocked += 1;
-      const errorMsg = `Invalid contact phone number: ${phoneNorm.error}`;
-      await db
-        .update(callsTable)
-        .set({
-          status: "policy_blocked",
-          outcome: "Blocked — invalid phone number",
-          summary: errorMsg,
-          errorState: "invalid_phone",
-        })
-        .where(eq(callsTable.id, call.id));
-      await db
-        .update(workflowJobsTable)
-        .set({
-          status: "failed",
-          attempts: job.attempts + 1,
-          lastError: errorMsg,
-        })
-        .where(eq(workflowJobsTable.id, job.id));
-      await db.insert(activitiesTable).values({
-        id: `activity_${crypto.randomUUID().slice(0, 12)}`,
-        businessId: job.businessId,
-        type: "policy",
-        title: "Call blocked — invalid phone number",
-        detail: `Cannot place queued call to ${contact?.name ?? "contact"}: ${phoneNorm.error} (raw: "${contact?.phone ?? ""}")`,
-      });
-      continue;
-    }
-
-    try {
-      const live = await startRetellCall({
-        toNumber: phoneNorm.e164,
-        market,
-        agentId: business?.retellAgentId ?? undefined,
-        metadata: { business_id: job.businessId, lead_id: call.leadId, call_id: call.id },
-      });
-      started += 1;
-      await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(eq(callsTable.id, call.id));
-      await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-      await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId: job.businessId, type: "call", title: "Queued call started by scheduler", detail: "Retell credentials became available; the backlog job was processed." });
-    } catch (error) {
-      failed += 1;
-      const message = error instanceof Error ? error.message : "Retell request failed";
-      await db.update(callsTable).set({ status: "uncertain", errorState: message, outcome: "Provider state uncertain" }).where(eq(callsTable.id, call.id));
-      const nextAttempts = job.attempts + 1;
-      if (nextAttempts < MAX_JOB_ATTEMPTS) {
-        await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 10 * 60 * 1000), lastError: message }).where(eq(workflowJobsTable.id, job.id));
-      } else {
-        await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: message }).where(eq(workflowJobsTable.id, job.id));
-      }
-    }
-  }
-
-  res.json({ jobs_seen: jobs.length, attempted, started, blocked, skipped_not_configured: skippedNotConfigured, failed });
+  const result = await processWorkflowJobs();
+  res.json(result);
 });
 
 /**

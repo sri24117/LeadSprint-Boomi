@@ -10,6 +10,7 @@ import {
   leadsTable,
   providerEventsTable,
   usageTable,
+  workflowJobsTable,
 } from "@workspace/db";
 import {
   providerConfig,
@@ -199,6 +200,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
   const callId = typeof body.call_id === "string" ? body.call_id : typeof body.callId === "string" ? body.callId : "";
   const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
   const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
+  const metadataCallId = typeof metadata.call_id === "string" ? metadata.call_id : "";
   if (!callId || !businessId) {
     res.status(400).json({ error: "call_id and metadata.business_id are required" });
     return;
@@ -215,20 +217,46 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     const failedTransferReasons = ["dial_failed", "dial_no_answer", "dial_busy", "voicemail_reached", "transfer_failed"];
     const transferFailed = transferAttempted && !transferSucceeded && (disconnectionReason ? failedTransferReasons.includes(disconnectionReason) : true);
 
-    const [callRow] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+    let [callRow] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+    if (!callRow && metadataCallId) {
+      const [orphanCall] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.id, metadataCallId)));
+      if (orphanCall) {
+        callRow = orphanCall;
+      }
+    }
 
-    await db.update(callsTable).set({
-      status: terminal ? "completed" : status === "failed" ? "failed" : "in_progress",
-      endedAt: terminal || status === "failed" ? new Date() : undefined,
-      durationSeconds: duration ?? undefined,
-      providerCallId: callId,
-      transferred: transferAttempted ? transferSucceeded : undefined,
-      summary: typeof body.call_analysis === "string" ? body.call_analysis : undefined,
-      outcome: transferFailed
-        ? "Transfer failed — message captured for manual follow-up"
-        : disconnectionReason,
-      errorState: status === "failed" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
-    }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+    if (callRow) {
+      await db.update(callsTable).set({
+        status: terminal ? "completed" : status === "failed" ? "failed" : "in_progress",
+        endedAt: terminal || status === "failed" ? new Date() : undefined,
+        durationSeconds: duration ?? undefined,
+        providerCallId: callId,
+        transferred: transferAttempted ? transferSucceeded : undefined,
+        summary: typeof body.call_analysis === "string" ? body.call_analysis : undefined,
+        outcome: transferFailed
+          ? "Transfer failed — message captured for manual follow-up"
+          : disconnectionReason,
+        errorState: status === "failed" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
+      }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.id, callRow.id)));
+
+      if (terminal) {
+        await db
+          .update(workflowJobsTable)
+          .set({
+            status: "completed",
+            lockedAt: null,
+            lockedBy: null,
+            leaseExpiresAt: null,
+            lastError: null,
+          })
+          .where(
+            and(
+              eq(workflowJobsTable.businessId, businessId),
+              eq(workflowJobsTable.idempotencyKey, callRow.id),
+            ),
+          );
+      }
+    }
 
     if (duration != null) {
       const activeUsage = await getActiveUsageRow(businessId, new Date(), db);
