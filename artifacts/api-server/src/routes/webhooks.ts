@@ -25,31 +25,43 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
-const MAX_WEBHOOK_AGE_MS = 5 * 60 * 1000; // 5 minutes
+export const MAX_WEBHOOK_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
-function verifyTimestampFreshness(
+export function verifyTimestampFreshness(
   timestampValue: string | number | undefined | null,
   maxAgeMs = MAX_WEBHOOK_AGE_MS,
 ): { valid: boolean; reason?: string } {
-  if (timestampValue === undefined || timestampValue === null || timestampValue === "") {
-    return { valid: true };
+  if (timestampValue === undefined || timestampValue === null) {
+    return { valid: false, reason: "Missing timestamp" };
+  }
+
+  if (typeof timestampValue === "string" && timestampValue.trim() === "") {
+    return { valid: false, reason: "Missing timestamp" };
   }
 
   let tsMs: number;
   if (typeof timestampValue === "number") {
+    if (isNaN(timestampValue) || !isFinite(timestampValue)) {
+      return { valid: false, reason: "Unparseable timestamp number" };
+    }
     tsMs = timestampValue < 10000000000 ? timestampValue * 1000 : timestampValue;
-  } else {
-    const parsed = Date.parse(timestampValue);
-    if (isNaN(parsed)) {
-      const num = Number(timestampValue);
-      if (!isNaN(num)) {
-        tsMs = num < 10000000000 ? num * 1000 : num;
-      } else {
+  } else if (typeof timestampValue === "string") {
+    const trimmed = timestampValue.trim();
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const num = Number(trimmed);
+      if (isNaN(num) || !isFinite(num)) {
         return { valid: false, reason: "Unparseable timestamp string" };
       }
+      tsMs = num < 10000000000 ? num * 1000 : num;
     } else {
+      const parsed = Date.parse(trimmed);
+      if (isNaN(parsed)) {
+        return { valid: false, reason: "Unparseable timestamp string" };
+      }
       tsMs = parsed;
     }
+  } else {
+    return { valid: false, reason: "Invalid timestamp type" };
   }
 
   const ageMs = Math.abs(Date.now() - tsMs);
