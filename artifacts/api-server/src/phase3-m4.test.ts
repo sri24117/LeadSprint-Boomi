@@ -142,13 +142,19 @@ vi.mock("@workspace/db", async () => {
       const tx = {
         select: makeSelectChain(actual),
         insert: (_table: any) => ({
-          values: (_val: any) => ({
-            returning: () => Promise.resolve([{ id: `tx_ins_${Date.now()}` }]),
-          }),
+          values: (_val: any) => {
+            const ret = {
+              onConflictDoNothing: () => ({
+                returning: () => Promise.resolve([{ id: `tx_ins_${Date.now()}` }]),
+              }),
+              returning: () => Promise.resolve([{ id: `tx_ins_${Date.now()}` }]),
+            };
+            return Object.assign(Promise.resolve([{ id: `tx_ins_${Date.now()}` }]), ret);
+          },
         }),
         update: (_table: any) => ({
           set: (_setVals: any) => ({
-            where: (_condition: any) => Promise.resolve(),
+            where: (_condition: any) => Promise.resolve([{ id: "updated" }]),
           }),
         }),
       };

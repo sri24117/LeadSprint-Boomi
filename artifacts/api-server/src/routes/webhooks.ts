@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   activitiesTable,
   appointmentsTable,
@@ -84,18 +84,21 @@ function eventId(req: Request, body: Record<string, unknown>): string {
   return candidate ?? crypto.createHash("sha256").update(rawBody(req)).digest("hex");
 }
 
-async function acceptProviderEvent(input: {
-  businessId: string;
-  provider: string;
-  externalEventId: string;
-  eventType: string;
-  payload: Record<string, unknown>;
-}): Promise<boolean> {
+async function acceptProviderEvent(
+  input: {
+    businessId: string;
+    provider: string;
+    externalEventId: string;
+    eventType: string;
+    payload: Record<string, unknown>;
+  },
+  dbOrTx: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0] = db,
+): Promise<boolean> {
   const payloadHash = crypto
     .createHash("sha256")
     .update(JSON.stringify(input.payload))
     .digest("hex");
-  const [created] = await db
+  const [created] = await dbOrTx
     .insert(providerEventsTable)
     .values({
       id: `event_${crypto.randomUUID().slice(0, 12)}`,
@@ -162,155 +165,304 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     return;
   }
 
-  let result: { accepted: boolean; reason?: string; lead_id?: string } = { accepted: false };
+  const rawEventId = eventId(req, body);
+  const namespacedEventId = `${businessId}:${rawEventId}`;
 
-  await db.transaction(async (tx) => {
-    const [existing] = await tx.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), eq(contactsTable.phone, phone))).limit(1);
-    if (existing) {
-      result = { accepted: false, reason: "duplicate" };
+  let result: { accepted: boolean; duplicate?: boolean; re_engaged?: boolean; lead_id?: string } = { accepted: false };
+
+  const hasAffirmativeConsent =
+    body.consent_given === true ||
+    body.consentGiven === true ||
+    body.consent_given === "true";
+
+  let consentCapturedAt: Date | null = null;
+  let consentSource: string | null = null;
+  let consentDisclosureVersion: string | null = null;
+  let disclosureText: string | null = null;
+
+  if (hasAffirmativeConsent) {
+    const tsResult = parseConsentTimestamp(body.consent_captured_at ?? null);
+    if (tsResult.invalid) {
+      res.status(400).json({ error: "consent_captured_at is invalid; supply a valid ISO 8601 timestamp or omit the field" });
       return;
     }
+    consentCapturedAt = tsResult.date;
 
-    const intakeIp = ((req.ip || (req.get("x-forwarded-for")?.split(",")[0]?.trim()) || null) ?? null) as string | null;
+    const rawSource = typeof body.consent_source === "string" ? body.consent_source : null;
+    const validatedSource = validateConsentSource(rawSource, "api_intake");
+    if (validatedSource === null) {
+      res.status(400).json({ error: `consent_source '${rawSource}' is not a recognised canonical value` });
+      return;
+    }
+    consentSource = validatedSource;
 
-    let recipientTimezone: string | null = null;
-    let timezoneProvenance: "explicit_intake" | "area_code_inferred" | "business_fallback" = "business_fallback";
+    consentDisclosureVersion = (typeof body.consent_disclosure_version === "string" && body.consent_disclosure_version.trim()) ? body.consent_disclosure_version.trim() : null;
+    disclosureText = (typeof body.disclosure_text === "string" && body.disclosure_text.trim()) ? body.disclosure_text.trim() : null;
+  }
 
-    // Issue 3 fix: validate supplied timezone as genuine IANA identifier before accepting as explicit_intake
-    const rawTzField = typeof body.recipient_timezone === "string" ? body.recipient_timezone.trim()
-      : (typeof body.timezone === "string" ? body.timezone.trim() : "");
+  const intakeIp = ((req.ip || (req.get("x-forwarded-for")?.split(",")[0]?.trim()) || null) ?? null) as string | null;
 
-    if (rawTzField) {
-      if (isValidIanaTimezone(rawTzField)) {
-        recipientTimezone = rawTzField;
-        timezoneProvenance = "explicit_intake";
-      } else {
-        // Supplied timezone is invalid — fall back to area-code inference; do NOT persist invalid value
-        const inferred = inferTimezoneFromPhone(phone);
-        recipientTimezone = inferred.timezone;
-        timezoneProvenance = inferred.provenance;
-      }
+  let recipientTimezone: string | null = null;
+  let timezoneProvenance: "explicit_intake" | "area_code_inferred" | "business_fallback" = "business_fallback";
+
+  const rawTzField = typeof body.recipient_timezone === "string" ? body.recipient_timezone.trim()
+    : (typeof body.timezone === "string" ? body.timezone.trim() : "");
+
+  if (rawTzField) {
+    if (isValidIanaTimezone(rawTzField)) {
+      recipientTimezone = rawTzField;
+      timezoneProvenance = "explicit_intake";
     } else {
       const inferred = inferTimezoneFromPhone(phone);
       recipientTimezone = inferred.timezone;
       timezoneProvenance = inferred.provenance;
     }
+  } else {
+    const inferred = inferTimezoneFromPhone(phone);
+    recipientTimezone = inferred.timezone;
+    timezoneProvenance = inferred.provenance;
+  }
 
-    // Affirmative consent check: only create opt_in consent event if affirmative consent is explicitly signaled
-    const hasAffirmativeConsent =
-      body.consent_given === true ||
-      body.consentGiven === true ||
-      body.consent_given === "true";
+  const explicitIntentScore =
+    typeof body.intent_score === "number" && !isNaN(body.intent_score) && body.intent_score >= 0 && body.intent_score <= 100
+      ? Math.round(body.intent_score)
+      : typeof body.intentScore === "number" && !isNaN(body.intentScore) && body.intentScore >= 0 && body.intentScore <= 100
+        ? Math.round(body.intentScore)
+        : undefined;
 
-    let consentCapturedAt: Date | null = null;
-    let consentSource: string | null = null;
-    let consentDisclosureVersion: string | null = null;
-    let disclosureText: string | null = null;
+  await db.transaction(async (tx) => {
+    const accepted = await acceptProviderEvent({
+      businessId,
+      provider: "LeadIntake",
+      externalEventId: namespacedEventId,
+      eventType: "lead_intake",
+      payload: body,
+    }, tx);
 
-    if (hasAffirmativeConsent) {
-      // Issue 1 fix: never substitute new Date() for a supplied-but-invalid consent timestamp
-      const tsResult = parseConsentTimestamp(body.consent_captured_at ?? null);
-      if (tsResult.invalid) {
-        // Supplied timestamp is invalid — reject request; do not fabricate a timestamp
-        res.status(400).json({ error: "consent_captured_at is invalid; supply a valid ISO 8601 timestamp or omit the field" });
-        return;
-      }
-      consentCapturedAt = tsResult.date;
-
-      // Issue 2 fix: validate consent source against canonical vocabulary
-      const rawSource = typeof body.consent_source === "string" ? body.consent_source : null;
-      const validatedSource = validateConsentSource(rawSource, "api_intake");
-      if (validatedSource === null) {
-        res.status(400).json({ error: `consent_source '${rawSource}' is not a recognised canonical value` });
-        return;
-      }
-      consentSource = validatedSource;
-
-      consentDisclosureVersion = (typeof body.consent_disclosure_version === "string" && body.consent_disclosure_version.trim()) ? body.consent_disclosure_version.trim() : null;
-      disclosureText = (typeof body.disclosure_text === "string" && body.disclosure_text.trim()) ? body.disclosure_text.trim() : null;
+    if (!accepted) {
+      result = { accepted: true, duplicate: true };
+      return;
     }
 
-    const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
-    const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-    await tx.insert(contactsTable).values({
-      id: contactId,
-      businessId,
-      name,
-      phone,
-      email: typeof body.email === "string" ? body.email : null,
-      consentStatus: "valid",
-      consentCapturedAt,
-      consentSource,
-      consentDisclosureVersion,
-      intakeIp,
-      recipientTimezone,
-      timezoneProvenance,
-    });
+    const [existingContact] = await tx
+      .select()
+      .from(contactsTable)
+      .where(and(eq(contactsTable.businessId, businessId), eq(contactsTable.phone, phone)))
+      .limit(1);
 
-    if (hasAffirmativeConsent) {
-      await tx.insert(consentEventsTable).values({
-        id: `consent_${crypto.randomUUID().slice(0, 12)}`,
+    let contactId: string;
+    if (!existingContact) {
+      contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
+      await tx.insert(contactsTable).values({
+        id: contactId,
+        businessId,
+        name,
+        phone,
+        email: typeof body.email === "string" ? body.email : null,
+        consentStatus: "valid",
+        consentCapturedAt,
+        consentSource,
+        consentDisclosureVersion,
+        intakeIp,
+        recipientTimezone,
+        timezoneProvenance,
+      });
+
+      if (hasAffirmativeConsent) {
+        await tx.insert(consentEventsTable).values({
+          id: `consent_${crypto.randomUUID().slice(0, 12)}`,
+          businessId,
+          contactId,
+          eventType: "opt_in",
+          source: consentSource ?? "api_intake",
+          disclosureVersion: consentDisclosureVersion,
+          disclosureText,
+          ipAddress: intakeIp,
+          userAgent: req.get("user-agent") || null,
+          metadata: {},
+          capturedAt: consentCapturedAt ?? new Date(),
+        });
+      }
+
+      const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
+      const leadValues: any = {
+        id: leadId,
         businessId,
         contactId,
-        eventType: "opt_in",
-        source: consentSource ?? "api_intake",
-        disclosureVersion: consentDisclosureVersion,
-        disclosureText,
-        ipAddress: intakeIp,
-        userAgent: req.get("user-agent") || null,
-        metadata: {},
-        capturedAt: consentCapturedAt ?? new Date(),
+        source: typeof body.source === "string" ? body.source : "webhook",
+        campaign: typeof body.campaign === "string" ? body.campaign : "Inbound enquiry",
+        project: typeof body.project === "string" ? body.project : "Configured project",
+        propertyType: typeof body.property_type === "string" ? body.property_type : "Not specified",
+        budgetLabel: typeof body.budget_label === "string" ? body.budget_label : "Not specified",
+        location: typeof body.location === "string" ? body.location : "Not specified",
+        timeline: typeof body.timeline === "string" ? body.timeline : "Not specified",
+        score: "warm",
+        status: "new",
+        nextAction: "Call lead",
+      };
+      if (explicitIntentScore !== undefined) {
+        leadValues.intentScore = explicitIntentScore;
+      }
+
+      await tx.insert(leadsTable).values(leadValues);
+      await tx.insert(activitiesTable).values({
+        id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+        businessId,
+        type: "intake",
+        title: `New lead received for ${name}`,
+        detail: "Authenticated intake webhook accepted",
       });
+
+      const callId = `call_${crypto.randomUUID().slice(0, 12)}`;
+      const jobId = `job_${crypto.randomUUID().slice(0, 12)}`;
+      const idempotencyKey = `intake_call_${leadId}`;
+
+      await tx.insert(callsTable).values({
+        id: callId,
+        businessId,
+        contactId,
+        leadId,
+        provider: "Retell",
+        idempotencyKey,
+        status: "queued",
+        summary: "Call queued for the approved qualification script.",
+        outcome: "Queued",
+      });
+
+      await tx.insert(workflowJobsTable).values({
+        id: jobId,
+        businessId,
+        type: "initiate_call",
+        idempotencyKey,
+        status: "queued",
+        availableAt: new Date(),
+      });
+
+      result = { accepted: true, lead_id: leadId, re_engaged: false };
+    } else {
+      contactId = existingContact.id;
+      await tx
+        .update(contactsTable)
+        .set({
+          name: name || existingContact.name,
+          email: typeof body.email === "string" ? body.email : existingContact.email,
+          intakeIp: intakeIp ?? existingContact.intakeIp,
+          recipientTimezone: recipientTimezone ?? existingContact.recipientTimezone,
+          timezoneProvenance: timezoneProvenance ?? existingContact.timezoneProvenance,
+          ...(hasAffirmativeConsent
+            ? {
+                consentCapturedAt: consentCapturedAt ?? existingContact.consentCapturedAt,
+                consentSource: consentSource ?? existingContact.consentSource,
+                consentDisclosureVersion: consentDisclosureVersion ?? existingContact.consentDisclosureVersion,
+              }
+            : {}),
+        })
+        .where(eq(contactsTable.id, contactId));
+
+      if (hasAffirmativeConsent) {
+        await tx.insert(consentEventsTable).values({
+          id: `consent_${crypto.randomUUID().slice(0, 12)}`,
+          businessId,
+          contactId,
+          eventType: "opt_in",
+          source: consentSource ?? "api_intake",
+          disclosureVersion: consentDisclosureVersion,
+          disclosureText,
+          ipAddress: intakeIp,
+          userAgent: req.get("user-agent") || null,
+          metadata: {},
+          capturedAt: consentCapturedAt ?? new Date(),
+        });
+      }
+
+      const existingLeads = await tx
+        .select()
+        .from(leadsTable)
+        .where(and(eq(leadsTable.businessId, businessId), eq(leadsTable.contactId, contactId)))
+        .orderBy(desc(leadsTable.createdAt));
+
+      const activeLead = existingLeads.find((l) => ["new", "contacted", "qualified"].includes(l.status));
+      let targetLeadId: string;
+
+      if (activeLead) {
+        targetLeadId = activeLead.id;
+        const updateValues: any = {
+          status: "new",
+          nextAction: "Call lead",
+          updatedAt: new Date(),
+          campaign: typeof body.campaign === "string" ? body.campaign : activeLead.campaign,
+          project: typeof body.project === "string" ? body.project : activeLead.project,
+          propertyType: typeof body.property_type === "string" ? body.property_type : activeLead.propertyType,
+          budgetLabel: typeof body.budget_label === "string" ? body.budget_label : activeLead.budgetLabel,
+          location: typeof body.location === "string" ? body.location : activeLead.location,
+          timeline: typeof body.timeline === "string" ? body.timeline : activeLead.timeline,
+        };
+        if (explicitIntentScore !== undefined) {
+          updateValues.intentScore = explicitIntentScore;
+        }
+        await tx.update(leadsTable).set(updateValues).where(eq(leadsTable.id, activeLead.id));
+      } else {
+        targetLeadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
+        const newLeadValues: any = {
+          id: targetLeadId,
+          businessId,
+          contactId,
+          source: typeof body.source === "string" ? body.source : "webhook",
+          campaign: typeof body.campaign === "string" ? body.campaign : "Inbound enquiry",
+          project: typeof body.project === "string" ? body.project : "Configured project",
+          propertyType: typeof body.property_type === "string" ? body.property_type : "Not specified",
+          budgetLabel: typeof body.budget_label === "string" ? body.budget_label : "Not specified",
+          location: typeof body.location === "string" ? body.location : "Not specified",
+          timeline: typeof body.timeline === "string" ? body.timeline : "Not specified",
+          score: "warm",
+          status: "new",
+          nextAction: "Call lead",
+        };
+        if (explicitIntentScore !== undefined) {
+          newLeadValues.intentScore = explicitIntentScore;
+        }
+        await tx.insert(leadsTable).values(newLeadValues);
+      }
+
+      await tx.insert(activitiesTable).values({
+        id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+        businessId,
+        type: "intake",
+        title: `Re-engaged lead received for ${name}`,
+        detail: "Authenticated intake webhook re-engagement accepted",
+      });
+
+      const callId = `call_${crypto.randomUUID().slice(0, 12)}`;
+      const jobId = `job_${crypto.randomUUID().slice(0, 12)}`;
+      const idempotencyKey = `intake_call_${targetLeadId}_${Date.now()}`;
+
+      await tx.insert(callsTable).values({
+        id: callId,
+        businessId,
+        contactId,
+        leadId: targetLeadId,
+        provider: "Retell",
+        idempotencyKey,
+        status: "queued",
+        summary: "Call queued for the approved qualification script.",
+        outcome: "Queued",
+      });
+
+      await tx.insert(workflowJobsTable).values({
+        id: jobId,
+        businessId,
+        type: "initiate_call",
+        idempotencyKey,
+        status: "queued",
+        availableAt: new Date(),
+      });
+
+      result = { accepted: true, lead_id: targetLeadId, re_engaged: true };
     }
-
-    await tx.insert(leadsTable).values({
-      id: leadId,
-      businessId,
-      contactId,
-      source: typeof body.source === "string" ? body.source : "webhook",
-      campaign: typeof body.campaign === "string" ? body.campaign : "Inbound enquiry",
-      project: typeof body.project === "string" ? body.project : "Configured project",
-      propertyType: typeof body.property_type === "string" ? body.property_type : "Not specified",
-      budgetLabel: typeof body.budget_label === "string" ? body.budget_label : "Not specified",
-      location: typeof body.location === "string" ? body.location : "Not specified",
-      timeline: typeof body.timeline === "string" ? body.timeline : "Not specified",
-      intentScore: 50,
-      score: "warm",
-      status: "new",
-      nextAction: "Call lead",
-    });
-    await tx.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: "Authenticated intake webhook accepted" });
-
-    const callId = `call_${crypto.randomUUID().slice(0, 12)}`;
-    const jobId = `job_${crypto.randomUUID().slice(0, 12)}`;
-    const idempotencyKey = `intake_call_${leadId}`;
-
-    await tx.insert(callsTable).values({
-      id: callId,
-      businessId,
-      contactId,
-      leadId,
-      provider: "Retell",
-      idempotencyKey,
-      status: "queued",
-      summary: "Call queued for the approved qualification script.",
-      outcome: "Queued",
-    });
-
-    await tx.insert(workflowJobsTable).values({
-      id: jobId,
-      businessId,
-      type: "initiate_call",
-      idempotencyKey,
-      status: "queued",
-      availableAt: new Date(),
-    });
-
-    result = { accepted: true, lead_id: leadId };
   });
 
-  if (!result.accepted && result.reason === "duplicate") {
-    res.status(200).json(result);
+  if (result.duplicate) {
+    res.status(200).json({ accepted: true, duplicate: true });
     return;
   }
 
