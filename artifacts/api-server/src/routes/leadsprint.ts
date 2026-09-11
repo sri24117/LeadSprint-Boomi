@@ -50,16 +50,20 @@ import {
   BookAppointmentResponse,
 } from "@workspace/api-zod";
 import {
-  createCalBooking,
-  getCalAvailability,
   hasRetellConfigForMarket,
   hasTwilioRoute,
   providerConfig,
-  ProviderRequestError,
   startRetellCall,
 } from "../lib/providers";
 import { evaluateCallPolicy } from "../lib/policy";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
+import {
+  AvailabilityError,
+  BookingError,
+  bookAppointmentForLead,
+  getAvailabilityForBusiness,
+  hasCalConfig,
+} from "../lib/appointments";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -250,35 +254,6 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
   };
 }
 
-function hasCalConfig(): boolean {
-  const config = providerConfig().calcom;
-  return Boolean(config.apiKey && config.eventTypeId);
-}
-
-function normalizedCalSlots(
-  value: unknown,
-  timezone: string,
-): Array<{ start_time: string; end_time: string; label: string }> {
-  const source =
-    value && typeof value === "object" && "data" in value
-      ? (value as { data?: unknown }).data
-      : value;
-  const candidates = Array.isArray(source)
-    ? source
-    : source && typeof source === "object" && "slots" in source
-      ? (source as { slots?: unknown }).slots
-      : [];
-  if (!Array.isArray(candidates)) return [];
-  return candidates.flatMap((slot) => {
-    if (!slot || typeof slot !== "object") return [];
-    const item = slot as Record<string, unknown>;
-    const start = typeof item.start === "string" ? item.start : typeof item.start_time === "string" ? item.start_time : "";
-    const end = typeof item.end === "string" ? item.end : typeof item.end_time === "string" ? item.end_time : "";
-    if (!start || !end) return [];
-    return [{ start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), label: new Date(start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: timezone }) }];
-  });
-}
-
 router.get("/auth/me", async (_req, res): Promise<void> => {
   await ensureSeedData();
   const req = _req;
@@ -454,65 +429,40 @@ router.post("/appointments/availability", async (req, res): Promise<void> => {
   const BUSINESS_ID = scopedBusinessId(req);
   const body = GetAvailabilityBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
-  const business = await getBusiness(BUSINESS_ID);
-  if (hasCalConfig()) {
-    try {
-      const start = new Date(`${body.data.date}T00:00:00Z`);
-      const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-      const providerSlots = normalizedCalSlots(await getCalAvailability({ start: start.toISOString(), end: end.toISOString(), timeZone: business?.timezone ?? "UTC" }), business?.timezone ?? "UTC");
-      if (!providerSlots.length) {
-        res.status(502).json({ error: "Cal.com returned no usable availability" });
-        return;
-      }
-      res.json(GetAvailabilityResponse.parse(providerSlots));
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Cal.com availability failed";
-      req.log.error({ err: message }, "Cal.com availability failed");
-      res.status(error instanceof ProviderRequestError ? 502 : 503).json({ error: message });
+  try {
+    const slots = await getAvailabilityForBusiness(BUSINESS_ID, body.data.date.toISOString().slice(0, 10));
+    res.json(GetAvailabilityResponse.parse(slots));
+  } catch (error) {
+    if (error instanceof AvailabilityError) {
+      req.log.error({ err: error.message }, "Cal.com availability failed");
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
+    throw error;
   }
-  const base = new Date(`${body.data.date}T13:00:00Z`);
-  const slots = [0, 1, 2, 3].map((offset) => {
-    const start = new Date(base.getTime() + offset * 60 * 60 * 1000);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
-    return { start_time: start.toISOString(), end_time: end.toISOString(), label: start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: business?.timezone ?? "UTC" }) };
-  });
-  res.json(GetAvailabilityResponse.parse(slots));
 });
 
 router.post("/appointments/book", async (req, res): Promise<void> => {
   const BUSINESS_ID = scopedBusinessId(req);
   const body = BookAppointmentBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
-  const [lead] = await db.select({ lead: leadsTable, contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
-  if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
-  const business = await getBusiness(BUSINESS_ID);
-  const appointmentId = id("appointment");
-  let externalId = `cal_${appointmentId}`;
-  if (hasCalConfig()) {
-    try {
-      const booking = await createCalBooking({
-        start: body.data.slot_start.toISOString(),
-        timeZone: business?.timezone ?? "UTC",
-        attendee: { name: lead.contact.name, email: lead.contact.email ?? `${lead.contact.id}@lead.local`, phoneNumber: lead.contact.phone },
-        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id },
-      });
-      externalId = booking.bookingId;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Cal.com booking failed";
-      req.log.error({ err: message, leadId: body.data.lead_id }, "Cal.com booking failed");
-      res.status(error instanceof ProviderRequestError ? 502 : 503).json({ error: message });
+  try {
+    const created = await bookAppointmentForLead({
+      businessId: BUSINESS_ID,
+      leadId: body.data.lead_id,
+      slotStart: new Date(body.data.slot_start),
+      slotEnd: new Date(body.data.slot_end),
+      source: "console",
+    });
+    res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(created, BUSINESS_ID)));
+  } catch (error) {
+    if (error instanceof BookingError) {
+      req.log.error({ err: error.message, leadId: body.data.lead_id }, "Cal.com booking failed");
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
+    throw error;
   }
-  const [created] = await db.insert(appointmentsTable).values({ id: appointmentId, businessId: BUSINESS_ID, contactId: lead.contact.id, leadId: body.data.lead_id, serviceOrProperty: business?.projectName ?? "Configured appointment", startTime: new Date(body.data.slot_start), endTime: new Date(body.data.slot_end), timezone: business?.timezone ?? "UTC", externalId }).returning();
-  await db.update(leadsTable).set({ status: "booked", nextAction: "Appointment confirmed", updatedAt: new Date() }).where(eq(leadsTable.id, body.data.lead_id));
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "booking", title: `Appointment booked for ${lead.contact.name}`, detail: "Cal.com verification complete" });
-  const usage = await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)).limit(1);
-  if (usage[0]) await db.update(usageTable).set({ bookingCount: sql`${usageTable.bookingCount} + 1` }).where(and(eq(usageTable.id, usage[0].id), eq(usageTable.businessId, BUSINESS_ID)));
-  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(created, BUSINESS_ID)));
 });
 
 router.get("/business-settings", async (_req, res): Promise<void> => {
