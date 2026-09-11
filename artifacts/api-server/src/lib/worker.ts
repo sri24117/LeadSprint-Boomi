@@ -11,6 +11,7 @@ import {
 import { evaluateCallPolicy, isKillSwitchEngaged } from "./policy";
 import { hasRetellConfigForMarket, startRetellCall } from "./providers";
 import { normalizeToE164 } from "./phone";
+import { getActiveUsageRow } from "./usage";
 import { logger } from "./logger";
 
 export const MAX_JOB_ATTEMPTS = 5;
@@ -232,7 +233,8 @@ export async function processWorkflowJobs(
     }
 
     const market = business.market === "IN" ? "IN" : "US";
-    if (!hasRetellConfigForMarket(market)) {
+    const businessFromNumber = business.phoneNumber?.trim() || undefined;
+    if (!hasRetellConfigForMarket(market, businessFromNumber)) {
       // Leave deferred; credentials missing, do not burn attempt
       await db
         .update(workflowJobsTable)
@@ -242,7 +244,7 @@ export async function processWorkflowJobs(
           lockedBy: null,
           leaseExpiresAt: null,
           availableAt: new Date(now.getTime() + 10 * 60 * 1000),
-          lastError: "Retell provider credentials not configured for market",
+          lastError: "Retell provider credentials or business phone number not configured for market",
         })
         .where(eq(workflowJobsTable.id, job.id));
       skippedNotConfigured += 1;
@@ -292,11 +294,16 @@ export async function processWorkflowJobs(
         )
     ).length;
 
+    const activeUsage = await getActiveUsageRow(job.businessId, now, db);
+    const currentVoiceMinutes = Number(activeUsage.voiceMinutes);
+
     const decision = evaluateCallPolicy({
       business: {
         timezone: business.timezone ?? "UTC",
         quietHours: business.quietHours,
         maxCallAttempts: business.maxCallAttempts ?? 2,
+        includedVoiceMinutes: business.includedVoiceMinutes ?? 300,
+        currentVoiceMinutes,
       },
       contact: {
         consentStatus: contact?.consentStatus ?? "valid",
@@ -415,6 +422,7 @@ export async function processWorkflowJobs(
         toNumber: phoneNorm.e164,
         market,
         agentId: business.retellAgentId ?? undefined,
+        fromNumber: business.phoneNumber?.trim() || undefined,
         metadata: {
           business_id: job.businessId,
           lead_id: call.leadId,

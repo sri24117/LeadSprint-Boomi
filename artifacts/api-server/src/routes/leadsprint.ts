@@ -170,9 +170,10 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
   };
 }
 
-function hasCalConfig(): boolean {
+function hasCalConfig(eventTypeId?: string | null): boolean {
   const config = providerConfig().calcom;
-  return Boolean(config.apiKey && config.eventTypeId);
+  const effectiveEventTypeId = eventTypeId?.trim() || config.eventTypeId;
+  return Boolean(config.apiKey && effectiveEventTypeId);
 }
 
 function normalizedCalSlots(
@@ -359,11 +360,20 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   const [contact] = contactId ? await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)) : [];
   const priorAttempts = (await db.select({ id: callsTable.id }).from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), sql`${callsTable.status} != 'policy_blocked'`))).length;
 
+  const activeUsage = await getActiveUsageRow(BUSINESS_ID, new Date(), db);
+  const currentVoiceMinutes = Number(activeUsage.voiceMinutes);
+
   const callId = id("call");
 
-  // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch.
+  // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch -> usage limit.
   const decision = evaluateCallPolicy({
-    business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
+    business: {
+      timezone: business?.timezone ?? "UTC",
+      quietHours: business?.quietHours,
+      maxCallAttempts: business?.maxCallAttempts ?? 2,
+      includedVoiceMinutes: business?.includedVoiceMinutes ?? 300,
+      currentVoiceMinutes,
+    },
     contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null },
     attemptsSoFar: priorAttempts,
   });
@@ -387,13 +397,15 @@ router.post("/calls/start", async (req, res): Promise<void> => {
 
   const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
   let current = created;
-  const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US");
+  const businessFromNumber = business?.phoneNumber?.trim() || undefined;
+  const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US", businessFromNumber);
   if (liveRetell) {
     try {
       const live = await startRetellCall({
         toNumber: normalizedLeadPhone.e164,
         market: business?.market === "IN" ? "IN" : "US",
         agentId: business?.retellAgentId ?? undefined,
+        fromNumber: businessFromNumber,
         metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id, call_id: callId },
       });
       [current] = await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
@@ -421,11 +433,20 @@ router.post("/appointments/availability", async (req, res): Promise<void> => {
   const body = GetAvailabilityBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const business = await getBusiness(BUSINESS_ID);
-  if (hasCalConfig()) {
+  const effectiveEventTypeId = business?.calEventTypeId?.trim() || undefined;
+  if (hasCalConfig(effectiveEventTypeId)) {
     try {
       const start = new Date(`${body.data.date}T00:00:00Z`);
       const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-      const providerSlots = normalizedCalSlots(await getCalAvailability({ start: start.toISOString(), end: end.toISOString(), timeZone: business?.timezone ?? "UTC" }), business?.timezone ?? "UTC");
+      const providerSlots = normalizedCalSlots(
+        await getCalAvailability({
+          start: start.toISOString(),
+          end: end.toISOString(),
+          timeZone: business?.timezone ?? "UTC",
+          eventTypeId: effectiveEventTypeId,
+        }),
+        business?.timezone ?? "UTC",
+      );
       if (!providerSlots.length) {
         res.status(502).json({ error: "Cal.com returned no usable availability" });
         return;
@@ -478,7 +499,8 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
   const operationKey = `book_${BUSINESS_ID}_${body.data.lead_id}_${body.data.slot_start.getTime()}`;
   let externalId = `cal_${appointmentId}`;
 
-  if (hasCalConfig()) {
+  const effectiveEventTypeId = business?.calEventTypeId?.trim() || undefined;
+  if (hasCalConfig(effectiveEventTypeId)) {
     try {
       const booking = await createCalBooking({
         start: body.data.slot_start.toISOString(),
@@ -490,6 +512,7 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
           lead_id: body.data.lead_id,
           operation_key: operationKey,
         },
+        eventTypeId: effectiveEventTypeId,
       });
       externalId = booking.bookingId;
     } catch (error) {
@@ -649,15 +672,36 @@ router.get("/today", async (_req, res): Promise<void> => {
   const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")));
   const activities = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(8);
   const upcoming = await Promise.all(appointments.map((row) => getAppointmentDto(row, BUSINESS_ID)));
+
+  const [unresolvedRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(leadsTable)
+    .where(
+      and(
+        eq(leadsTable.businessId, BUSINESS_ID),
+        ilike(leadsTable.nextAction, "%Call back%"),
+      ),
+    );
+  const unresolvedMessages = unresolvedRow?.count ?? 0;
+
+  const businessFromNumber = business?.phoneNumber?.trim() || undefined;
+  const effectiveEventTypeId = business?.calEventTypeId?.trim() || undefined;
   const warnings = [
-    ...(hasRetellConfigForMarket() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
-    ...(hasCalConfig() ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
+    ...(hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US", businessFromNumber) ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
+    ...(hasCalConfig(effectiveEventTypeId) ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
     ...(business?.market === "IN" && !hasTwilioRoute("IN") ? ["India telephony route is not configured"] : []),
     ...(business?.market !== "IN" && !hasTwilioRoute("US") ? ["US telephony route is not configured"] : []),
   ];
   sendValidatedResponse(res, GetTodayResponse, {
     date_label: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: business?.timezone ?? "UTC" }).format(new Date()),
-    metrics: { new_leads: leads.filter((lead) => lead.status === "new").length, calls_in_progress: calls.filter((call) => call.status === "in_progress").length, hot_leads: leads.filter((lead) => lead.score === "hot").length, appointments_today: appointments.length, failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, unresolved_messages: 1 },
+    metrics: {
+      new_leads: leads.filter((lead) => lead.status === "new").length,
+      calls_in_progress: calls.filter((call) => call.status === "in_progress").length,
+      hot_leads: leads.filter((lead) => lead.score === "hot").length,
+      appointments_today: appointments.length,
+      failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length,
+      unresolved_messages: unresolvedMessages,
+    },
     setup_warnings: warnings,
     upcoming,
     recent_activity: activities.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() })),

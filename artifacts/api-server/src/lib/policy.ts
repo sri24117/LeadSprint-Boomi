@@ -20,7 +20,8 @@ export type PolicyBlockReason =
   | "suppressed"
   | "quiet_hours"
   | "attempt_limit"
-  | "kill_switch";
+  | "kill_switch"
+  | "usage_limit";
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -32,6 +33,8 @@ export interface PolicyBusinessInput {
   timezone: string;
   quietHours: string | null | undefined;
   maxCallAttempts: number;
+  includedVoiceMinutes?: number;
+  currentVoiceMinutes?: number;
 }
 
 export interface PolicyContactInput {
@@ -136,6 +139,18 @@ export function evaluateCallPolicy(input: {
       allowed: false,
       reason: "kill_switch",
       message: "LEADSPRINT_KILL_SWITCH is engaged; all outbound calling is paused.",
+    };
+  }
+
+  if (
+    business.includedVoiceMinutes !== undefined &&
+    business.currentVoiceMinutes !== undefined &&
+    business.currentVoiceMinutes >= business.includedVoiceMinutes
+  ) {
+    return {
+      allowed: false,
+      reason: "usage_limit",
+      message: `Voice minutes entitlement (${business.includedVoiceMinutes}m) exhausted for this billing period (used: ${business.currentVoiceMinutes.toFixed(1)}m).`,
     };
   }
 

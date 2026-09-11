@@ -94,13 +94,15 @@ export async function startRetellCall(input: {
   toNumber: string;
   market: "US" | "IN";
   agentId?: string;
+  fromNumber?: string;
   metadata: Record<string, string>;
 }): Promise<{ callId: string }> {
   const config = providerConfig().retell;
-  const fromNumber =
+  const fallbackFrom =
     input.market === "IN"
       ? config.fromNumberIN ?? config.fromNumber
       : config.fromNumberUS ?? config.fromNumber;
+  const fromNumber = input.fromNumber?.trim() || fallbackFrom;
   const agentId = input.agentId?.trim() || config.agentId;
   const values = requireValues("Retell", {
     apiKey: config.apiKey,
@@ -128,14 +130,18 @@ export async function startRetellCall(input: {
   return { callId: body.call_id };
 }
 
-export function hasRetellConfigForMarket(market?: "US" | "IN"): boolean {
+export function hasRetellConfigForMarket(
+  market?: "US" | "IN",
+  fromNumberOverride?: string,
+): boolean {
   const config = providerConfig().retell;
-  const fromNumber =
+  const fallbackFrom =
     market === "IN"
       ? config.fromNumberIN ?? config.fromNumber
       : market === "US"
         ? config.fromNumberUS ?? config.fromNumber
         : config.fromNumberUS ?? config.fromNumberIN ?? config.fromNumber;
+  const fromNumber = fromNumberOverride?.trim() || fallbackFrom;
   return Boolean(config.apiKey && config.agentId && fromNumber);
 }
 
@@ -187,11 +193,13 @@ export async function getCalAvailability(input: {
   start: string;
   end: string;
   timeZone: string;
+  eventTypeId?: string;
 }): Promise<unknown> {
   const config = providerConfig().calcom;
+  const eventTypeId = input.eventTypeId?.trim() || config.eventTypeId;
   const values = requireValues("Cal.com", {
     apiKey: config.apiKey,
-    eventTypeId: config.eventTypeId,
+    eventTypeId,
   });
   const url = new URL(`${config.apiUrl}/slots`);
   url.searchParams.set("eventTypeId", values.eventTypeId);
@@ -210,11 +218,13 @@ export async function createCalBooking(input: {
   timeZone: string;
   attendee: { name: string; email: string; phone?: string };
   metadata: Record<string, string>;
+  eventTypeId?: string;
 }): Promise<{ bookingId: string }> {
   const config = providerConfig().calcom;
+  const eventTypeId = input.eventTypeId?.trim() || config.eventTypeId;
   const values = requireValues("Cal.com", {
     apiKey: config.apiKey,
-    eventTypeId: config.eventTypeId,
+    eventTypeId,
   });
   const response = await fetch(`${config.apiUrl}/bookings`, {
     method: "POST",
