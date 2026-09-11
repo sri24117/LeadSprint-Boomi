@@ -3,6 +3,7 @@ import { Router, type IRouter, type Request } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import {
   activitiesTable,
+  appointmentsTable,
   businessesTable,
   callsTable,
   contactsTable,
@@ -19,6 +20,7 @@ import {
 } from "../lib/providers";
 import { normalizeToE164 } from "../lib/phone";
 import { getActiveUsageRow } from "../lib/usage";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -103,7 +105,12 @@ async function acceptProviderEvent(input: {
 }
 
 function signatureFor(req: Request): string | undefined {
-  return req.get("x-retell-signature") ?? req.get("x-leadsprint-signature");
+  return (
+    req.get("x-cal-signature-256") ??
+    req.get("x-calcom-signature") ??
+    req.get("x-retell-signature") ??
+    req.get("x-leadsprint-signature")
+  );
 }
 
 router.post("/webhooks/intake", async (req, res): Promise<void> => {
@@ -344,13 +351,266 @@ router.post("/webhooks/calcom", async (req, res): Promise<void> => {
   }
 
   const metadata = (body.metadata && typeof body.metadata === "object" ? body.metadata : {}) as Record<string, unknown>;
-  const businessId = typeof metadata.business_id === "string" ? metadata.business_id : "";
+  const payloadMetadata = (payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}) as Record<string, unknown>;
+  const businessId =
+    (typeof metadata.business_id === "string" && metadata.business_id) ||
+    (typeof payloadMetadata.business_id === "string" && payloadMetadata.business_id) ||
+    "";
   if (!businessId) {
     res.status(400).json({ error: "metadata.business_id is required" });
     return;
   }
-  const accepted = await acceptProviderEvent({ businessId, provider: "Cal.com", externalEventId: eventId(req, body), eventType: typeof body.triggerEvent === "string" ? body.triggerEvent : "booking", payload: body });
-  res.status(202).json({ accepted: true, duplicate: !accepted });
+
+  const triggerEvent = typeof body.triggerEvent === "string" ? body.triggerEvent : "";
+  const externalEventId = eventId(req, body);
+
+  const accepted = await acceptProviderEvent({
+    businessId,
+    provider: "Cal.com",
+    externalEventId,
+    eventType: triggerEvent || "booking",
+    payload: body,
+  });
+
+  if (!accepted) {
+    res.status(202).json({ accepted: true, duplicate: true });
+    return;
+  }
+
+  const uidCandidate = payload.uid ?? payload.bookingId ?? payload.id ?? body.uid;
+  const uid = uidCandidate != null ? String(uidCandidate).trim() : "";
+
+  switch (triggerEvent) {
+    case "BOOKING_CONFIRMED":
+    case "BOOKING_CREATED": {
+      if (!uid) {
+        logger.warn({ triggerEvent, businessId }, "Cal.com webhook missing booking uid");
+        break;
+      }
+      try {
+        await db.transaction(async (tx) => {
+          const [appointment] = await tx
+            .select()
+            .from(appointmentsTable)
+            .where(
+              and(
+                eq(appointmentsTable.businessId, businessId),
+                eq(appointmentsTable.externalId, uid),
+              ),
+            )
+            .limit(1);
+
+          if (!appointment) {
+            logger.warn(
+              { businessId, uid, triggerEvent },
+              "Cal.com webhook appointment not found for tenant",
+            );
+            return;
+          }
+
+          await tx
+            .update(appointmentsTable)
+            .set({ status: "confirmed" })
+            .where(eq(appointmentsTable.id, appointment.id));
+        });
+      } catch (err) {
+        logger.error(
+          { err, triggerEvent, businessId, uid },
+          "Failed to process Cal.com webhook lifecycle reconciliation",
+        );
+        await db
+          .delete(providerEventsTable)
+          .where(
+            and(
+              eq(providerEventsTable.provider, "Cal.com"),
+              eq(providerEventsTable.externalEventId, externalEventId),
+            ),
+          );
+        res.status(500).json({ error: "Failed to process Cal.com event" });
+        return;
+      }
+      break;
+    }
+
+    case "BOOKING_RESCHEDULED": {
+      if (!uid) {
+        logger.warn({ triggerEvent, businessId }, "Cal.com webhook missing booking uid");
+        break;
+      }
+      try {
+        await db.transaction(async (tx) => {
+          const [appointment] = await tx
+            .select()
+            .from(appointmentsTable)
+            .where(
+              and(
+                eq(appointmentsTable.businessId, businessId),
+                eq(appointmentsTable.externalId, uid),
+              ),
+            )
+            .limit(1);
+
+          if (!appointment) {
+            logger.warn(
+              { businessId, uid, triggerEvent },
+              "Cal.com webhook appointment not found for tenant",
+            );
+            return;
+          }
+
+          let newStart: Date | undefined;
+          let newEnd: Date | undefined;
+
+          if (payload.startTime && typeof payload.startTime === "string") {
+            const parsed = new Date(payload.startTime);
+            if (!isNaN(parsed.getTime())) {
+              newStart = parsed;
+            }
+          }
+          if (payload.endTime && typeof payload.endTime === "string") {
+            const parsed = new Date(payload.endTime);
+            if (!isNaN(parsed.getTime())) {
+              newEnd = parsed;
+            }
+          }
+
+          if (!newStart || !newEnd) {
+            logger.warn(
+              { uid, payloadStartTime: payload.startTime, payloadEndTime: payload.endTime },
+              "BOOKING_RESCHEDULED missing valid startTime or endTime; preserving existing times",
+            );
+          }
+
+          const finalStart = newStart ?? appointment.startTime;
+          const finalEnd = newEnd ?? appointment.endTime;
+
+          await tx
+            .update(appointmentsTable)
+            .set({
+              startTime: finalStart,
+              endTime: finalEnd,
+              status: "confirmed",
+            })
+            .where(eq(appointmentsTable.id, appointment.id));
+
+          await tx
+            .update(leadsTable)
+            .set({
+              nextAction: "Appointment rescheduled",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(leadsTable.id, appointment.leadId),
+                eq(leadsTable.businessId, businessId),
+              ),
+            );
+
+          await tx.insert(activitiesTable).values({
+            id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+            businessId,
+            type: "booking",
+            title: "Appointment rescheduled",
+            detail: `Showing rescheduled for ${finalStart.toISOString()}.`,
+          });
+        });
+      } catch (err) {
+        logger.error(
+          { err, triggerEvent, businessId, uid },
+          "Failed to process Cal.com webhook lifecycle reconciliation",
+        );
+        await db
+          .delete(providerEventsTable)
+          .where(
+            and(
+              eq(providerEventsTable.provider, "Cal.com"),
+              eq(providerEventsTable.externalEventId, externalEventId),
+            ),
+          );
+        res.status(500).json({ error: "Failed to process Cal.com event" });
+        return;
+      }
+      break;
+    }
+
+    case "BOOKING_CANCELLED": {
+      if (!uid) {
+        logger.warn({ triggerEvent, businessId }, "Cal.com webhook missing booking uid");
+        break;
+      }
+      try {
+        await db.transaction(async (tx) => {
+          const [appointment] = await tx
+            .select()
+            .from(appointmentsTable)
+            .where(
+              and(
+                eq(appointmentsTable.businessId, businessId),
+                eq(appointmentsTable.externalId, uid),
+              ),
+            )
+            .limit(1);
+
+          if (!appointment) {
+            logger.warn(
+              { businessId, uid, triggerEvent },
+              "Cal.com webhook appointment not found for tenant",
+            );
+            return;
+          }
+
+          await tx
+            .update(appointmentsTable)
+            .set({ status: "cancelled" })
+            .where(eq(appointmentsTable.id, appointment.id));
+
+          await tx
+            .update(leadsTable)
+            .set({
+              nextAction: "Reschedule showing",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(leadsTable.id, appointment.leadId),
+                eq(leadsTable.businessId, businessId),
+              ),
+            );
+
+          await tx.insert(activitiesTable).values({
+            id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+            businessId,
+            type: "booking",
+            title: "Appointment cancelled",
+            detail: `Cal.com booking ${uid} was cancelled.`,
+          });
+        });
+      } catch (err) {
+        logger.error(
+          { err, triggerEvent, businessId, uid },
+          "Failed to process Cal.com webhook lifecycle reconciliation",
+        );
+        await db
+          .delete(providerEventsTable)
+          .where(
+            and(
+              eq(providerEventsTable.provider, "Cal.com"),
+              eq(providerEventsTable.externalEventId, externalEventId),
+            ),
+          );
+        res.status(500).json({ error: "Failed to process Cal.com event" });
+        return;
+      }
+      break;
+    }
+
+    default: {
+      logger.info({ triggerEvent, businessId }, "Unhandled Cal.com event type received");
+      break;
+    }
+  }
+
+  res.status(202).json({ accepted: true, duplicate: false });
 });
 
 export default router;
