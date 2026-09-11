@@ -29,8 +29,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check API spec codegen drift
+        run: |
+          pnpm --filter @workspace/api-spec run codegen
+          git diff --exit-code lib/api-client-react lib/api-zod
+
       - name: Typecheck (all workspace packages)
         run: pnpm run typecheck
+
+      - name: Run unit tests
+        run: pnpm test
 
       - name: Build API server
         run: pnpm --filter @workspace/api-server run build

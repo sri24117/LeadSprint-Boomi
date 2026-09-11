@@ -1,12 +1,12 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { providerReadiness } from "../lib/providers";
+import { sendValidatedResponse } from "./leadsprint";
 
 const router: IRouter = Router();
 
 router.get("/healthz", (_req, res) => {
-  const data = HealthCheckResponse.parse({ status: "ok" });
-  res.json(data);
+  sendValidatedResponse(res, HealthCheckResponse, { status: "ok" });
 });
 
 router.get("/readyz", (_req, res) => {

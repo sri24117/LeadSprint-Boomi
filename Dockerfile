@@ -46,7 +46,9 @@ RUN pnpm install --frozen-lockfile --prod
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /repo
 ENV NODE_ENV=production
-COPY --from=build /repo /repo
+COPY --from=build --chown=node:node /repo /repo
+
+USER node
 
 ENV STATIC_DIR=/repo/artifacts/leadsprint/dist/public
 ENV PORT=5000
@@ -56,4 +58,4 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5000)+'/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+CMD ["sh", "-c", "node artifacts/api-server/dist/migrate.mjs && node --enable-source-maps artifacts/api-server/dist/index.mjs"]

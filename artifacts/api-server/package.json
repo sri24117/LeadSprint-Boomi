@@ -23,6 +23,7 @@
     "http-proxy-middleware": "^4.2.0",
     "libphonenumber-js": "^1.13.12",
     "nodemailer": "^6.9.16",
+    "pg": "^8.22.0",
     "pino": "^9.14.0",
     "pino-http": "^10.5.0",
     "zod": "^4.5.4"
@@ -33,6 +34,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
     "@types/nodemailer": "^6.4.17",
+    "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.1",
     "esbuild": "0.27.3",
     "esbuild-plugin-pino": "^2.3.3",

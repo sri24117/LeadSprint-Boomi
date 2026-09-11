@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
@@ -199,6 +199,32 @@ function normalizedCalSlots(
   });
 }
 
+export function sendValidatedResponse<T>(
+  res: Response,
+  schema: { safeParse: (data: unknown) => { success: true; data: T } | { success: false; error: any } },
+  data: unknown,
+  status = 200,
+  context?: string,
+): void {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    logger.warn(
+      {
+        context: context ?? (res.req ? `${res.req.method} ${res.req.originalUrl?.split("?")[0]}` : "response_dto"),
+        issues: result.error.issues?.map((i: any) => ({
+          path: Array.isArray(i.path) ? i.path.join(".") : String(i.path),
+          code: i.code,
+          message: i.message,
+        })) ?? [],
+      },
+      "Response DTO validation mismatch; serving raw payload to prevent 500 error",
+    );
+    res.status(status).json(data);
+    return;
+  }
+  res.status(status).json(result.data);
+}
+
 router.get("/auth/me", async (_req, res): Promise<void> => {
   await ensureSeedData();
   const req = _req;
@@ -206,10 +232,10 @@ router.get("/auth/me", async (_req, res): Promise<void> => {
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
   const business = await getBusiness(businessId);
   if (!user || !business) { res.status(503).json({ error: "Operator setup is not ready" }); return; }
-  res.json(GetAuthMeResponse.parse({
+  sendValidatedResponse(res, GetAuthMeResponse, {
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
     business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled },
-  }));
+  });
 });
 
 router.post("/auth/logout", async (_req, res): Promise<void> => { res.sendStatus(204); });
@@ -226,7 +252,7 @@ router.get("/leads", async (req, res): Promise<void> => {
   }
   const rows = await db.select({ id: leadsTable.id }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(...filters)).orderBy(desc(leadsTable.createdAt));
   const result = await Promise.all(rows.map((row) => getLeadDto(row.id, BUSINESS_ID)));
-  res.json(GetLeadsResponse.parse(result.filter(Boolean)));
+  sendValidatedResponse(res, GetLeadsResponse, result.filter(Boolean));
 });
 
 router.get("/leads/:id", async (req, res): Promise<void> => {
@@ -235,7 +261,7 @@ router.get("/leads/:id", async (req, res): Promise<void> => {
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
   const lead = await getLeadDto(params.data.id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
-  res.json(GetLeadResponse.parse(lead));
+  sendValidatedResponse(res, GetLeadResponse, lead);
 });
 
 router.patch("/leads/:id", async (req, res): Promise<void> => {
@@ -250,7 +276,7 @@ router.patch("/leads/:id", async (req, res): Promise<void> => {
   }).where(and(eq(leadsTable.id, params.data.id), eq(leadsTable.businessId, BUSINESS_ID))).returning({ id: leadsTable.id });
   if (!updated) { res.status(404).json({ error: "Lead not found" }); return; }
   const lead = await getLeadDto(updated.id, BUSINESS_ID);
-  res.json(UpdateLeadResponse.parse(lead));
+  sendValidatedResponse(res, UpdateLeadResponse, lead);
 });
 
 router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
@@ -268,7 +294,7 @@ router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
   });
 
   const lead = await getLeadDto(params.data.id, BUSINESS_ID);
-  res.json(SuppressLeadResponse.parse(lead));
+  sendValidatedResponse(res, SuppressLeadResponse, lead);
 });
 
 router.post("/leads/import", async (req, res): Promise<void> => {
@@ -298,7 +324,7 @@ router.post("/leads/import", async (req, res): Promise<void> => {
   await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "import", title: `${imported} leads imported`, detail: "CSV import completed with duplicate checks" });
   const leads = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID)).orderBy(desc(leadsTable.createdAt));
   const result = await Promise.all(leads.slice(0, imported).map((lead) => getLeadDto(lead.id, BUSINESS_ID)));
-  res.json(ImportLeadsResponse.parse({ imported, skipped, leads: result.filter(Boolean) }));
+  sendValidatedResponse(res, ImportLeadsResponse, { imported, skipped, leads: result.filter(Boolean) });
 });
 
 router.get("/calls", async (req, res): Promise<void> => {
@@ -306,7 +332,7 @@ router.get("/calls", async (req, res): Promise<void> => {
   const query = GetCallsQueryParams.safeParse(req.query);
   if (!query.success) { res.status(400).json({ error: query.error.message }); return; }
   const rows = await db.select().from(callsTable).where(and(eq(callsTable.businessId, BUSINESS_ID), query.data.status ? eq(callsTable.status, query.data.status) : undefined)).orderBy(desc(callsTable.createdAt));
-  res.json(GetCallsResponse.parse(await Promise.all(rows.map(getCallDto))));
+  sendValidatedResponse(res, GetCallsResponse, await Promise.all(rows.map(getCallDto)));
 });
 
 router.get("/calls/:id", async (req, res): Promise<void> => {
@@ -315,7 +341,7 @@ router.get("/calls/:id", async (req, res): Promise<void> => {
   if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
   const [row] = await db.select().from(callsTable).where(and(eq(callsTable.id, params.data.id), eq(callsTable.businessId, BUSINESS_ID)));
   if (!row) { res.status(404).json({ error: "Call not found" }); return; }
-  res.json(GetCallResponse.parse(await getCallDto(row)));
+  sendValidatedResponse(res, GetCallResponse, await getCallDto(row));
 });
 
 router.post("/calls/start", async (req, res): Promise<void> => {
@@ -325,7 +351,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   const lead = await getLeadDto(body.data.lead_id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
   const [existing] = await db.select().from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), eq(callsTable.status, "in_progress"))).limit(1);
-  if (existing) { res.json(StartCallResponse.parse(await getCallDto(existing))); return; }
+  if (existing) { sendValidatedResponse(res, StartCallResponse, await getCallDto(existing)); return; }
 
   const business = await getBusiness(BUSINESS_ID);
   const [leadRow] = await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
@@ -349,7 +375,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
       outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason,
     }).returning();
     await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "policy", title: `Call blocked for ${lead.name}`, detail: decision.message ?? "Blocked by call policy." });
-    res.status(409).json(StartCallResponse.parse(await getCallDto(blocked)));
+    sendValidatedResponse(res, StartCallResponse, await getCallDto(blocked), 409);
     return;
   }
 
@@ -380,14 +406,14 @@ router.post("/calls/start", async (req, res): Promise<void> => {
     await db.insert(workflowJobsTable).values({ id: id("job"), businessId: BUSINESS_ID, type: "initiate_call", idempotencyKey: callId });
   }
   await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "call", title: `Call ${liveRetell ? "started" : "queued"} for ${lead.name}`, detail: liveRetell ? "Retell accepted the call · awaiting signed callback" : "Demo mode · Retell credentials are not configured", });
-  res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
+  sendValidatedResponse(res, StartCallResponse, await getCallDto(current), 201);
 });
 
 router.get("/appointments", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
   const rows = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed"))).orderBy(appointmentsTable.startTime);
-  res.json(GetAppointmentsResponse.parse(await Promise.all(rows.map((row) => getAppointmentDto(row, BUSINESS_ID)))));
+  sendValidatedResponse(res, GetAppointmentsResponse, await Promise.all(rows.map((row) => getAppointmentDto(row, BUSINESS_ID))));
 });
 
 router.post("/appointments/availability", async (req, res): Promise<void> => {
@@ -404,7 +430,7 @@ router.post("/appointments/availability", async (req, res): Promise<void> => {
         res.status(502).json({ error: "Cal.com returned no usable availability" });
         return;
       }
-      res.json(GetAvailabilityResponse.parse(providerSlots));
+      sendValidatedResponse(res, GetAvailabilityResponse, providerSlots);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Cal.com availability failed";
@@ -419,7 +445,7 @@ router.post("/appointments/availability", async (req, res): Promise<void> => {
     const end = new Date(start.getTime() + 30 * 60 * 1000);
     return { start_time: start.toISOString(), end_time: end.toISOString(), label: start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: business?.timezone ?? "UTC" }) };
   });
-  res.json(GetAvailabilityResponse.parse(slots));
+  sendValidatedResponse(res, GetAvailabilityResponse, slots);
 });
 
 router.post("/appointments/book", async (req, res): Promise<void> => {
@@ -443,7 +469,7 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
     .limit(1);
 
   if (existingConfirmed) {
-    res.json(BookAppointmentResponse.parse(await getAppointmentDto(existingConfirmed, BUSINESS_ID)));
+    sendValidatedResponse(res, BookAppointmentResponse, await getAppointmentDto(existingConfirmed, BUSINESS_ID));
     return;
   }
 
@@ -488,7 +514,7 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
     .limit(1);
 
   if (existingByExternal) {
-    res.json(BookAppointmentResponse.parse(await getAppointmentDto(existingByExternal, BUSINESS_ID)));
+    sendValidatedResponse(res, BookAppointmentResponse, await getAppointmentDto(existingByExternal, BUSINESS_ID));
     return;
   }
 
@@ -574,7 +600,7 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
     return;
   }
 
-  res.status(201).json(BookAppointmentResponse.parse(await getAppointmentDto(appointmentRow, BUSINESS_ID)));
+  sendValidatedResponse(res, BookAppointmentResponse, await getAppointmentDto(appointmentRow, BUSINESS_ID), 201);
 });
 
 router.get("/business-settings", async (_req, res): Promise<void> => {
@@ -582,11 +608,11 @@ router.get("/business-settings", async (_req, res): Promise<void> => {
   const BUSINESS_ID = scopedBusinessId(req);
   const business = await getBusiness(BUSINESS_ID);
   if (!business) { res.status(503).json({ error: "Business setup is not ready" }); return; }
-  res.json(GetBusinessSettingsResponse.parse({
+  sendValidatedResponse(res, GetBusinessSettingsResponse, {
     id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber,
     recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled,
     project_name: business.projectName, services_or_property_types: business.servicesOrPropertyTypes, approved_faq: business.approvedFaq, qualification_questions: business.qualificationQuestions, escalation_rules: business.escalationRules, cal_event_type_id: business.calEventTypeId, retell_agent_id: business.retellAgentId,
-  }));
+  });
 });
 
 router.patch("/business-settings", async (req, res): Promise<void> => {
@@ -599,11 +625,11 @@ router.patch("/business-settings", async (req, res): Promise<void> => {
     aiDisclosure: body.data.ai_disclosure, quietHours: body.data.quiet_hours, maxCallAttempts: body.data.max_call_attempts, updatedAt: new Date(),
   }).where(eq(businessesTable.id, BUSINESS_ID)).returning();
   if (!updated) { res.status(404).json({ error: "Business not found" }); return; }
-  res.json(UpdateBusinessSettingsResponse.parse({
+  sendValidatedResponse(res, UpdateBusinessSettingsResponse, {
     id: updated.id, name: updated.name, market: updated.market, timezone: updated.timezone, phone_number: updated.phoneNumber, transfer_number: updated.transferNumber,
     recording_disclosure: updated.recordingDisclosure, ai_disclosure: updated.aiDisclosure, quiet_hours: updated.quietHours, max_call_attempts: updated.maxCallAttempts, suppression_enabled: updated.suppressionEnabled,
     project_name: updated.projectName, services_or_property_types: updated.servicesOrPropertyTypes, approved_faq: updated.approvedFaq, qualification_questions: updated.qualificationQuestions, escalation_rules: updated.escalationRules, cal_event_type_id: updated.calEventTypeId, retell_agent_id: updated.retellAgentId,
-  }));
+  });
 });
 
 router.get("/activity", async (req, res): Promise<void> => {
@@ -611,7 +637,7 @@ router.get("/activity", async (req, res): Promise<void> => {
   const query = GetActivityQueryParams.safeParse(req.query);
   if (!query.success) { res.status(400).json({ error: query.error.message }); return; }
   const rows = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(query.data.limit ?? 8);
-  res.json(GetActivityResponse.parse(rows.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() }))));
+  sendValidatedResponse(res, GetActivityResponse, rows.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() })));
 });
 
 router.get("/today", async (_req, res): Promise<void> => {
@@ -629,13 +655,13 @@ router.get("/today", async (_req, res): Promise<void> => {
     ...(business?.market === "IN" && !hasTwilioRoute("IN") ? ["India telephony route is not configured"] : []),
     ...(business?.market !== "IN" && !hasTwilioRoute("US") ? ["US telephony route is not configured"] : []),
   ];
-  res.json(GetTodayResponse.parse({
+  sendValidatedResponse(res, GetTodayResponse, {
     date_label: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: business?.timezone ?? "UTC" }).format(new Date()),
     metrics: { new_leads: leads.filter((lead) => lead.status === "new").length, calls_in_progress: calls.filter((call) => call.status === "in_progress").length, hot_leads: leads.filter((lead) => lead.score === "hot").length, appointments_today: appointments.length, failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, unresolved_messages: 1 },
     setup_warnings: warnings,
     upcoming,
     recent_activity: activities.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() })),
-  }));
+  });
 });
 
 router.get("/reports/weekly", async (_req, res): Promise<void> => {
@@ -645,7 +671,7 @@ router.get("/reports/weekly", async (_req, res): Promise<void> => {
   const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
   const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, BUSINESS_ID));
   const usage = await getActiveUsageRow(BUSINESS_ID);
-  res.json(GetWeeklyReportResponse.parse({
+  sendValidatedResponse(res, GetWeeklyReportResponse, {
     period_label: "This week · pilot report",
     leads_received: leads.length,
     calls_attempted: calls.length,
@@ -656,7 +682,7 @@ router.get("/reports/weekly", async (_req, res): Promise<void> => {
     failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length,
     voice_minutes: Number(usage.voiceMinutes),
     estimated_provider_cost: Number(usage.estimatedCost),
-  }));
+  });
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {
@@ -665,14 +691,14 @@ router.get("/usage", async (_req, res): Promise<void> => {
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID)).limit(1);
   const usage = await getActiveUsageRow(BUSINESS_ID);
   const { periodLabel } = getBillingPeriod();
-  res.json(GetUsageResponse.parse({
+  sendValidatedResponse(res, GetUsageResponse, {
     period_label: periodLabel,
     voice_minutes: Number(usage.voiceMinutes),
     included_minutes: business?.includedVoiceMinutes ?? 300,
     sms_count: usage.smsCount,
     booking_count: usage.bookingCount,
     estimated_cost: Number(usage.estimatedCost),
-  }));
+  });
 });
 
 export default router;
