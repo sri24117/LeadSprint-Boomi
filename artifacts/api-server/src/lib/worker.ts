@@ -308,6 +308,8 @@ export async function processWorkflowJobs(
       contact: {
         consentStatus: contact?.consentStatus ?? "valid",
         suppressedAt: contact?.suppressedAt ?? null,
+        recipientTimezone: contact?.recipientTimezone ?? null,
+        timezoneProvenance: contact?.timezoneProvenance ?? "business_fallback",
       },
       attemptsSoFar: priorAttempts,
       now,

@@ -5,10 +5,12 @@
  *
  *   consent valid?
  *     -> not suppressed?
- *       -> within quiet hours?
- *         -> attempt limit available?
- *           -> provider kill switch off?
- *             -> enqueue call
+ *       -> recipient quiet hours? (if resolvable)
+ *         -> business quiet hours?
+ *           -> attempt limit available?
+ *             -> provider kill switch off?
+ *               -> usage minutes available?
+ *                 -> enqueue call
  *
  * This runs before any outbound provider request (Retell/Twilio) is made,
  * so a business misconfiguration or a bad lead state fails closed instead
@@ -40,6 +42,8 @@ export interface PolicyBusinessInput {
 export interface PolicyContactInput {
   consentStatus: string;
   suppressedAt: Date | null;
+  recipientTimezone?: string | null;
+  timezoneProvenance?: "explicit_intake" | "area_code_inferred" | "business_fallback" | string | null;
 }
 
 /**
@@ -118,11 +122,28 @@ export function evaluateCallPolicy(input: {
     };
   }
 
+  // Dual-gate quiet hours:
+  // Gate 1: Recipient timezone (when resolvable and not falling back to business timezone)
+  if (
+    contact.recipientTimezone &&
+    contact.timezoneProvenance &&
+    contact.timezoneProvenance !== "business_fallback"
+  ) {
+    if (isWithinQuietHours(business.quietHours, contact.recipientTimezone, now)) {
+      return {
+        allowed: false,
+        reason: "quiet_hours",
+        message: `Outside allowed calling hours for recipient timezone (${business.quietHours} ${contact.recipientTimezone}).`,
+      };
+    }
+  }
+
+  // Gate 2: Business timezone
   if (isWithinQuietHours(business.quietHours, business.timezone, now)) {
     return {
       allowed: false,
       reason: "quiet_hours",
-      message: `Outside allowed calling hours (${business.quietHours} ${business.timezone}).`,
+      message: `Outside allowed calling hours for business timezone (${business.quietHours} ${business.timezone}).`,
     };
   }
 

@@ -6,6 +6,7 @@ import {
   appointmentsTable,
   businessesTable,
   callsTable,
+  consentEventsTable,
   contactsTable,
   db,
   leadsTable,
@@ -18,7 +19,7 @@ import {
   verifyTwilioSignature,
   verifyWebhookSignature,
 } from "../lib/providers";
-import { normalizeToE164 } from "../lib/phone";
+import { normalizeToE164, inferTimezoneFromPhone, isValidIanaTimezone, validateConsentSource, parseConsentTimestamp } from "../lib/phone";
 import { getActiveUsageRow } from "../lib/usage";
 import { logger } from "../lib/logger";
 
@@ -158,9 +159,98 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
       return;
     }
 
+    const intakeIp = ((req.ip || (req.get("x-forwarded-for")?.split(",")[0]?.trim()) || null) ?? null) as string | null;
+
+    let recipientTimezone: string | null = null;
+    let timezoneProvenance: "explicit_intake" | "area_code_inferred" | "business_fallback" = "business_fallback";
+
+    // Issue 3 fix: validate supplied timezone as genuine IANA identifier before accepting as explicit_intake
+    const rawTzField = typeof body.recipient_timezone === "string" ? body.recipient_timezone.trim()
+      : (typeof body.timezone === "string" ? body.timezone.trim() : "");
+
+    if (rawTzField) {
+      if (isValidIanaTimezone(rawTzField)) {
+        recipientTimezone = rawTzField;
+        timezoneProvenance = "explicit_intake";
+      } else {
+        // Supplied timezone is invalid — fall back to area-code inference; do NOT persist invalid value
+        const inferred = inferTimezoneFromPhone(phone);
+        recipientTimezone = inferred.timezone;
+        timezoneProvenance = inferred.provenance;
+      }
+    } else {
+      const inferred = inferTimezoneFromPhone(phone);
+      recipientTimezone = inferred.timezone;
+      timezoneProvenance = inferred.provenance;
+    }
+
+    // Affirmative consent check: only create opt_in consent event if affirmative consent is explicitly signaled
+    const hasAffirmativeConsent =
+      body.consent_given === true ||
+      body.consentGiven === true ||
+      body.consent_given === "true";
+
+    let consentCapturedAt: Date | null = null;
+    let consentSource: string | null = null;
+    let consentDisclosureVersion: string | null = null;
+    let disclosureText: string | null = null;
+
+    if (hasAffirmativeConsent) {
+      // Issue 1 fix: never substitute new Date() for a supplied-but-invalid consent timestamp
+      const tsResult = parseConsentTimestamp(body.consent_captured_at ?? null);
+      if (tsResult.invalid) {
+        // Supplied timestamp is invalid — reject request; do not fabricate a timestamp
+        res.status(400).json({ error: "consent_captured_at is invalid; supply a valid ISO 8601 timestamp or omit the field" });
+        return;
+      }
+      consentCapturedAt = tsResult.date;
+
+      // Issue 2 fix: validate consent source against canonical vocabulary
+      const rawSource = typeof body.consent_source === "string" ? body.consent_source : null;
+      const validatedSource = validateConsentSource(rawSource, "api_intake");
+      if (validatedSource === null) {
+        res.status(400).json({ error: `consent_source '${rawSource}' is not a recognised canonical value` });
+        return;
+      }
+      consentSource = validatedSource;
+
+      consentDisclosureVersion = (typeof body.consent_disclosure_version === "string" && body.consent_disclosure_version.trim()) ? body.consent_disclosure_version.trim() : null;
+      disclosureText = (typeof body.disclosure_text === "string" && body.disclosure_text.trim()) ? body.disclosure_text.trim() : null;
+    }
+
     const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
     const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-    await tx.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null });
+    await tx.insert(contactsTable).values({
+      id: contactId,
+      businessId,
+      name,
+      phone,
+      email: typeof body.email === "string" ? body.email : null,
+      consentStatus: "valid",
+      consentCapturedAt,
+      consentSource,
+      consentDisclosureVersion,
+      intakeIp,
+      recipientTimezone,
+      timezoneProvenance,
+    });
+
+    if (hasAffirmativeConsent) {
+      await tx.insert(consentEventsTable).values({
+        id: `consent_${crypto.randomUUID().slice(0, 12)}`,
+        businessId,
+        contactId,
+        eventType: "opt_in",
+        source: consentSource ?? "api_intake",
+        disclosureVersion: consentDisclosureVersion,
+        disclosureText,
+        ipAddress: intakeIp,
+        userAgent: req.get("user-agent") || null,
+        metadata: {},
+        capturedAt: consentCapturedAt ?? new Date(),
+      });
+    }
+
     await tx.insert(leadsTable).values({
       id: leadId,
       businessId,

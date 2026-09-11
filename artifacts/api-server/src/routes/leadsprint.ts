@@ -7,6 +7,7 @@ import {
   appointmentsTable,
   businessesTable,
   callsTable,
+  consentEventsTable,
   contactsTable,
   leadsTable,
   providerEventsTable,
@@ -60,7 +61,7 @@ import {
 } from "../lib/providers";
 import { evaluateCallPolicy } from "../lib/policy";
 import { logger } from "../lib/logger";
-import { normalizeToE164 } from "../lib/phone";
+import { normalizeToE164, inferTimezoneFromPhone, isValidIanaTimezone, validateConsentSource, parseConsentTimestamp } from "../lib/phone";
 import { getActiveUsageRow, getBillingPeriod } from "../lib/usage";
 
 const router: IRouter = Router();
@@ -148,6 +149,11 @@ async function getLeadDto(leadId: string, businessId = BUSINESS_ID) {
     location: row.lead.location, timeline: row.lead.timeline, qualification_status: row.lead.qualificationStatus,
     intent_score: row.lead.intentScore, score: row.lead.score, next_action: row.lead.nextAction, status: row.lead.status,
     suppressed: Boolean(row.contact.suppressedAt), last_call: iso(lastCall?.endedAt ?? lastCall?.startedAt ?? null), created_at: row.lead.createdAt.toISOString(),
+    consent_captured_at: row.contact.consentCapturedAt ? row.contact.consentCapturedAt.toISOString() : null,
+    consent_source: row.contact.consentSource ?? null,
+    consent_disclosure_version: row.contact.consentDisclosureVersion ?? null,
+    recipient_timezone: row.contact.recipientTimezone ?? null,
+    timezone_provenance: row.contact.timezoneProvenance ?? "business_fallback",
   };
 }
 
@@ -292,6 +298,19 @@ router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
     await tx.update(contactsTable).set({ suppressedAt: new Date(), consentStatus: "suppressed" }).where(eq(contactsTable.id, row.contact.id));
     await tx.update(leadsTable).set({ status: "suppressed", nextAction: "No further calls", updatedAt: new Date() }).where(eq(leadsTable.id, params.data.id));
     await tx.insert(suppressionsTable).values({ id: id("suppression"), businessId: BUSINESS_ID, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator" });
+    await tx.insert(consentEventsTable).values({
+      id: id("consent_event"),
+      businessId: BUSINESS_ID,
+      contactId: row.contact.id,
+      eventType: "suppression",
+      source: "operator_console",
+      disclosureVersion: null,
+      disclosureText: null,
+      ipAddress: ((req.ip || (req.get("x-forwarded-for")?.split(",")[0]?.trim()) || null) ?? null) as string | null,
+      userAgent: req.get("user-agent") || null,
+      metadata: { reason: body.data.reason ?? "Suppressed by operator" },
+      capturedAt: new Date(),
+    });
   });
 
   const lead = await getLeadDto(params.data.id, BUSINESS_ID);
@@ -305,6 +324,7 @@ router.post("/leads/import", async (req, res): Promise<void> => {
   let imported = 0;
   let skipped = 0;
   for (const row of body.data.rows) {
+    const rowObj = row as Record<string, unknown>;
     const phoneNorm = normalizeToE164(row.phone);
     if (!phoneNorm.valid) {
       skipped += 1;
@@ -314,10 +334,108 @@ router.post("/leads/import", async (req, res): Promise<void> => {
     const existing = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, BUSINESS_ID), eq(contactsTable.phone, phone))).limit(1);
     if (existing[0]) { skipped += 1; continue; }
 
+    let recipientTimezone: string | null = null;
+    let timezoneProvenance: "explicit_intake" | "area_code_inferred" | "business_fallback" = "business_fallback";
+
+    // Issue 3 fix: validate supplied timezone as genuine IANA identifier before accepting as explicit_intake
+    const rawCsvTz = typeof rowObj.recipient_timezone === "string" ? rowObj.recipient_timezone.trim()
+      : (typeof rowObj.timezone === "string" ? (rowObj.timezone as string).trim() : "");
+
+    if (rawCsvTz) {
+      if (isValidIanaTimezone(rawCsvTz)) {
+        recipientTimezone = rawCsvTz;
+        timezoneProvenance = "explicit_intake";
+      } else {
+        // Supplied timezone is invalid — fall back to area-code inference; do NOT persist invalid value
+        const inferred = inferTimezoneFromPhone(phone);
+        recipientTimezone = inferred.timezone;
+        timezoneProvenance = inferred.provenance;
+      }
+    } else {
+      const inferred = inferTimezoneFromPhone(phone);
+      recipientTimezone = inferred.timezone;
+      timezoneProvenance = inferred.provenance;
+    }
+
+    const hasAffirmativeConsent =
+      rowObj.consent_given === true ||
+      rowObj.consentGiven === true ||
+      rowObj.consent_given === "true" ||
+      rowObj.consent_given === "yes";
+
+    let consentCapturedAt: Date | null = null;
+    let consentSource: string | null = null;
+    let consentDisclosureVersion: string | null = null;
+    let disclosureText: string | null = null;
+
+    if (hasAffirmativeConsent) {
+      // Issue 1 fix: never substitute new Date() for a supplied-but-invalid consent timestamp
+      // For CSV/historical import, an invalid supplied timestamp means reject/skip that row.
+      const tsCandidate = rowObj.consent_date ?? rowObj.consent_captured_at ?? null;
+      const tsResult = parseConsentTimestamp(tsCandidate);
+      if (tsResult.invalid) {
+        // Supplied timestamp present but invalid — skip row; do not fabricate a timestamp
+        skipped += 1;
+        continue;
+      }
+      consentCapturedAt = tsResult.date;
+
+      // Issue 2 fix: validate consent source against canonical vocabulary
+      // For CSV rows identified as historical records use historical_import, otherwise csv_import as default
+      const rawCsvSource = typeof rowObj.consent_source === "string" ? rowObj.consent_source
+        : (typeof rowObj.source === "string" ? rowObj.source as string : null);
+      const csvDefaultSource = (typeof rawCsvSource === "string" && rawCsvSource.trim() === "historical_import")
+        ? "historical_import" as const
+        : "csv_import" as const;
+      const validatedSource = validateConsentSource(
+        typeof rowObj.consent_source === "string" ? rowObj.consent_source : null,
+        csvDefaultSource,
+      );
+      if (validatedSource === null) {
+        // Non-canonical source supplied — skip row
+        skipped += 1;
+        continue;
+      }
+      consentSource = validatedSource;
+
+      consentDisclosureVersion = typeof rowObj.disclosure_version === "string" ? rowObj.disclosure_version.trim() : (typeof rowObj.consent_disclosure_version === "string" ? rowObj.consent_disclosure_version.trim() : null);
+      disclosureText = typeof rowObj.disclosure_text === "string" ? rowObj.disclosure_text.trim() : null;
+    }
+
     const contactId = id("contact");
     const leadId = id("lead");
     await db.transaction(async (tx) => {
-      await tx.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone, email: row.email ?? null });
+      await tx.insert(contactsTable).values({
+        id: contactId,
+        businessId: BUSINESS_ID,
+        name: row.name,
+        phone,
+        email: row.email ?? null,
+        consentStatus: "valid",
+        consentCapturedAt,
+        consentSource,
+        consentDisclosureVersion,
+        intakeIp: null,
+        recipientTimezone,
+        timezoneProvenance,
+      });
+
+      if (hasAffirmativeConsent) {
+        await tx.insert(consentEventsTable).values({
+          id: id("consent_event"),
+          businessId: BUSINESS_ID,
+          contactId,
+          eventType: "opt_in",
+          source: consentSource ?? "csv_import",
+          disclosureVersion: consentDisclosureVersion,
+          disclosureText,
+          ipAddress: null,
+          userAgent: req.get("user-agent") || null,
+          metadata: {},
+          capturedAt: consentCapturedAt ?? new Date(),
+        });
+      }
+
       await tx.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
     });
     imported += 1;

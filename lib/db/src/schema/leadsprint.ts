@@ -54,6 +54,12 @@ export const contactsTable = pgTable("contacts", {
   preferredLanguage: text("preferred_language").notNull().default("en"),
   consentStatus: text("consent_status").notNull().default("valid"),
   suppressedAt: timestamp("suppressed_at", { withTimezone: true }),
+  consentCapturedAt: timestamp("consent_captured_at", { withTimezone: true }),
+  consentSource: text("consent_source"),
+  consentDisclosureVersion: text("consent_disclosure_version"),
+  intakeIp: text("intake_ip"),
+  recipientTimezone: text("recipient_timezone"),
+  timezoneProvenance: text("timezone_provenance").notNull().default("business_fallback"),
 });
 
 export const leadsTable = pgTable("leads", {
@@ -180,6 +186,23 @@ export const providerEventsTable = pgTable("provider_events", {
   providerEventUnique: uniqueIndex("provider_events_provider_external_unique").on(table.provider, table.externalEventId),
 }));
 
+export const consentEventsTable = pgTable("consent_events", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id").notNull().references(() => businessesTable.id),
+  contactId: text("contact_id").notNull().references(() => contactsTable.id),
+  eventType: text("event_type").notNull(),
+  source: text("source").notNull(),
+  disclosureVersion: text("disclosure_version"),
+  disclosureText: text("disclosure_text"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  metadata: jsonb("metadata").notNull().default({}),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  businessContactIdx: index("consent_events_business_contact_idx").on(table.businessId, table.contactId),
+  capturedAtIdx: index("consent_events_captured_at_idx").on(table.capturedAt),
+}));
+
 export const insertBusinessSchema = createInsertSchema(businessesTable);
 export const insertUserSchema = createInsertSchema(usersTable);
 export const insertContactSchema = createInsertSchema(contactsTable);
@@ -191,6 +214,7 @@ export const insertUsageSchema = createInsertSchema(usageTable);
 export const insertSuppressionSchema = createInsertSchema(suppressionsTable);
 export const insertWorkflowJobSchema = createInsertSchema(workflowJobsTable);
 export const insertProviderEventSchema = createInsertSchema(providerEventsTable);
+export const insertConsentEventSchema = createInsertSchema(consentEventsTable);
 
 export type Business = z.infer<typeof insertBusinessSchema>;
 export type User = z.infer<typeof insertUserSchema>;
@@ -198,3 +222,4 @@ export type Contact = z.infer<typeof insertContactSchema>;
 export type Lead = z.infer<typeof insertLeadSchema>;
 export type Call = z.infer<typeof insertCallSchema>;
 export type Appointment = z.infer<typeof insertAppointmentSchema>;
+export type ConsentEvent = z.infer<typeof insertConsentEventSchema>;
