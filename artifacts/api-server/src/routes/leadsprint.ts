@@ -437,6 +437,31 @@ router.post("/leads/import", async (req, res): Promise<void> => {
       }
 
       await tx.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
+
+      const callId = id("call");
+      const jobId = id("job");
+      const idempotencyKey = `import_call_${leadId}`;
+
+      await tx.insert(callsTable).values({
+        id: callId,
+        businessId: BUSINESS_ID,
+        contactId,
+        leadId,
+        provider: "Retell",
+        idempotencyKey,
+        status: "queued",
+        summary: "Call queued from CSV import.",
+        outcome: "Queued",
+      });
+
+      await tx.insert(workflowJobsTable).values({
+        id: jobId,
+        businessId: BUSINESS_ID,
+        type: "initiate_call",
+        idempotencyKey,
+        status: "queued",
+        availableAt: new Date(),
+      });
     });
     imported += 1;
   }

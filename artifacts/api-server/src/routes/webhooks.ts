@@ -268,6 +268,32 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
       nextAction: "Call lead",
     });
     await tx.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: "Authenticated intake webhook accepted" });
+
+    const callId = `call_${crypto.randomUUID().slice(0, 12)}`;
+    const jobId = `job_${crypto.randomUUID().slice(0, 12)}`;
+    const idempotencyKey = `intake_call_${leadId}`;
+
+    await tx.insert(callsTable).values({
+      id: callId,
+      businessId,
+      contactId,
+      leadId,
+      provider: "Retell",
+      idempotencyKey,
+      status: "queued",
+      summary: "Call queued for the approved qualification script.",
+      outcome: "Queued",
+    });
+
+    await tx.insert(workflowJobsTable).values({
+      id: jobId,
+      businessId,
+      type: "initiate_call",
+      idempotencyKey,
+      status: "queued",
+      availableAt: new Date(),
+    });
+
     result = { accepted: true, lead_id: leadId };
   });
 
