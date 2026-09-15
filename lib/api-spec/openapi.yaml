@@ -494,7 +494,8 @@ components:
         quiet_hours: { type: string }
         max_call_attempts: { type: number }
         suppression_enabled: { type: boolean }
-      required: [id, name, market, timezone, phone_number, transfer_number, recording_disclosure, ai_disclosure, quiet_hours, max_call_attempts, suppression_enabled]
+        calling_paused: { type: boolean }
+      required: [id, name, market, timezone, phone_number, transfer_number, recording_disclosure, ai_disclosure, quiet_hours, max_call_attempts, suppression_enabled, calling_paused]
     AuthSession:
       type: object
       properties:
@@ -694,6 +695,7 @@ components:
         ai_disclosure: { type: boolean }
         quiet_hours: { type: string }
         max_call_attempts: { type: number, minimum: 1, maximum: 10 }
+        calling_paused: { type: boolean }
     WeeklyReport:
       type: object
       properties:

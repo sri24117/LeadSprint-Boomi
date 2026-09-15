@@ -61,7 +61,8 @@ export const GetAuthMeResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "calling_paused": zod.boolean()
 })
 })
 
@@ -91,7 +92,8 @@ export const LoginResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "calling_paused": zod.boolean()
 })
 })
 
@@ -525,7 +527,8 @@ export const GetBusinessSettingsResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "calling_paused": zod.boolean()
 }).and(zod.object({
   "project_name": zod.string(),
   "services_or_property_types": zod.array(zod.string()),
@@ -554,7 +557,8 @@ export const UpdateBusinessSettingsBody = zod.object({
   "recording_disclosure": zod.boolean().optional(),
   "ai_disclosure": zod.boolean().optional(),
   "quiet_hours": zod.string().optional(),
-  "max_call_attempts": zod.number().min(1).max(updateBusinessSettingsBodyMaxCallAttemptsMax).optional()
+  "max_call_attempts": zod.number().min(1).max(updateBusinessSettingsBodyMaxCallAttemptsMax).optional(),
+  "calling_paused": zod.boolean().optional()
 })
 
 export const UpdateBusinessSettingsResponse = zod.object({
@@ -568,7 +572,8 @@ export const UpdateBusinessSettingsResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "calling_paused": zod.boolean()
 }).and(zod.object({
   "project_name": zod.string(),
   "services_or_property_types": zod.array(zod.string()),

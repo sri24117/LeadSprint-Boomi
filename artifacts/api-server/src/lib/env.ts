@@ -28,6 +28,8 @@ export const envSchema = z
     CORS_ALLOWED_ORIGINS: z.string().optional(),
     TRUST_PROXY: z.string().optional(),
     LOG_LEVEL: z.string().optional(),
+    ENABLE_INTERNAL_WORKER: z.string().optional(),
+    INTERNAL_WORKER_INTERVAL_MS: z.coerce.number().int().positive().optional(),
   })
   .superRefine((data, ctx) => {
     const isProduction = data.NODE_ENV === "production";

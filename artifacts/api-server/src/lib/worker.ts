@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, eq, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, ne, or, sql } from "drizzle-orm";
 import {
   activitiesTable,
   businessesTable,
@@ -304,6 +304,7 @@ export async function processWorkflowJobs(
         maxCallAttempts: business.maxCallAttempts ?? 2,
         includedVoiceMinutes: business.includedVoiceMinutes ?? 300,
         currentVoiceMinutes,
+        callingPaused: business.callingPaused,
       },
       contact: {
         consentStatus: contact?.consentStatus ?? "valid",
@@ -415,6 +416,72 @@ export async function processWorkflowJobs(
         title: "Call blocked — invalid phone number",
         detail: `Cannot place queued call to ${contact?.name ?? "contact"}: ${phoneNorm.error} (raw: "${contact?.phone ?? ""}")`,
       });
+      continue;
+    }
+
+    // 7.5. Same-contact active-call protection lock
+    let shouldDispatch = true;
+    if (call.contactId) {
+      await db.transaction(async (tx) => {
+        const [lockedContact] = await tx
+          .select({ id: contactsTable.id })
+          .from(contactsTable)
+          .where(
+            and(
+              eq(contactsTable.id, call.contactId),
+              eq(contactsTable.businessId, job.businessId),
+            ),
+          )
+          .for("update");
+
+        if (!lockedContact) return;
+
+        const staleThreshold = new Date(now.getTime() - 5 * 60 * 1000);
+        const activeCalls = await tx
+          .select({ id: callsTable.id, status: callsTable.status })
+          .from(callsTable)
+          .where(
+            and(
+              eq(callsTable.businessId, job.businessId),
+              eq(callsTable.contactId, call.contactId),
+              ne(callsTable.id, call.id),
+              or(
+                inArray(callsTable.status, ["in_progress", "provider_accepted", "ringing", "connected"]),
+                and(
+                  eq(callsTable.status, "provider_requesting"),
+                  gte(callsTable.createdAt, staleThreshold),
+                ),
+              ),
+            ),
+          );
+
+        if (activeCalls.length > 0) {
+          shouldDispatch = false;
+        } else {
+          await tx
+            .update(callsTable)
+            .set({
+              status: "provider_requesting",
+              startedAt: now,
+            })
+            .where(eq(callsTable.id, call.id));
+          shouldDispatch = true;
+        }
+      });
+    }
+
+    if (!shouldDispatch) {
+      await db
+        .update(workflowJobsTable)
+        .set({
+          status: "deferred",
+          lockedAt: null,
+          lockedBy: null,
+          leaseExpiresAt: null,
+          availableAt: new Date(now.getTime() + 2 * 60 * 1000),
+          lastError: "Deferred: active call already in progress for this contact",
+        })
+        .where(eq(workflowJobsTable.id, job.id));
       continue;
     }
 

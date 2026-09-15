@@ -37,6 +37,7 @@ export interface PolicyBusinessInput {
   maxCallAttempts: number;
   includedVoiceMinutes?: number;
   currentVoiceMinutes?: number;
+  callingPaused?: boolean | null;
 }
 
 export interface PolicyContactInput {
@@ -122,6 +123,22 @@ export function evaluateCallPolicy(input: {
     };
   }
 
+  if (business.callingPaused === true) {
+    return {
+      allowed: false,
+      reason: "kill_switch",
+      message: "Outbound calling is paused for this workspace.",
+    };
+  }
+
+  if (isKillSwitchEngaged()) {
+    return {
+      allowed: false,
+      reason: "kill_switch",
+      message: "LEADSPRINT_KILL_SWITCH is engaged; all outbound calling is paused.",
+    };
+  }
+
   // Dual-gate quiet hours:
   // Gate 1: Recipient timezone (when resolvable and not falling back to business timezone)
   if (
@@ -144,22 +161,6 @@ export function evaluateCallPolicy(input: {
       allowed: false,
       reason: "quiet_hours",
       message: `Outside allowed calling hours for business timezone (${business.quietHours} ${business.timezone}).`,
-    };
-  }
-
-  if (attemptsSoFar >= business.maxCallAttempts) {
-    return {
-      allowed: false,
-      reason: "attempt_limit",
-      message: `Maximum call attempts (${business.maxCallAttempts}) already reached for this lead.`,
-    };
-  }
-
-  if (isKillSwitchEngaged()) {
-    return {
-      allowed: false,
-      reason: "kill_switch",
-      message: "LEADSPRINT_KILL_SWITCH is engaged; all outbound calling is paused.",
     };
   }
 

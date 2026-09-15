@@ -32,6 +32,7 @@ export const businessesTable = pgTable("businesses", {
   calEventTypeId: text("cal_event_type_id"),
   retellAgentId: text("retell_agent_id"),
   includedVoiceMinutes: integer("included_voice_minutes").notNull().default(300),
+  callingPaused: boolean("calling_paused").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

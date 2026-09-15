@@ -241,7 +241,7 @@ router.get("/auth/me", async (_req, res): Promise<void> => {
   if (!user || !business) { res.status(503).json({ error: "Operator setup is not ready" }); return; }
   sendValidatedResponse(res, GetAuthMeResponse, {
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled },
+    business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled, calling_paused: business.callingPaused },
   });
 });
 
@@ -516,6 +516,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
       maxCallAttempts: business?.maxCallAttempts ?? 2,
       includedVoiceMinutes: business?.includedVoiceMinutes ?? 300,
       currentVoiceMinutes,
+      callingPaused: business?.callingPaused,
     },
     contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null },
     attemptsSoFar: priorAttempts,
@@ -776,7 +777,7 @@ router.get("/business-settings", async (_req, res): Promise<void> => {
   if (!business) { res.status(503).json({ error: "Business setup is not ready" }); return; }
   sendValidatedResponse(res, GetBusinessSettingsResponse, {
     id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber,
-    recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled,
+    recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled, calling_paused: business.callingPaused,
     project_name: business.projectName, services_or_property_types: business.servicesOrPropertyTypes, approved_faq: business.approvedFaq, qualification_questions: business.qualificationQuestions, escalation_rules: business.escalationRules, cal_event_type_id: business.calEventTypeId, retell_agent_id: business.retellAgentId,
   });
 });
@@ -788,12 +789,13 @@ router.patch("/business-settings", async (req, res): Promise<void> => {
   const [updated] = await db.update(businessesTable).set({
     market: body.data.market, timezone: body.data.timezone, transferNumber: body.data.transfer_number, projectName: body.data.project_name,
     approvedFaq: body.data.approved_faq, qualificationQuestions: body.data.qualification_questions, recordingDisclosure: body.data.recording_disclosure,
-    aiDisclosure: body.data.ai_disclosure, quietHours: body.data.quiet_hours, maxCallAttempts: body.data.max_call_attempts, updatedAt: new Date(),
+    aiDisclosure: body.data.ai_disclosure, quietHours: body.data.quiet_hours, maxCallAttempts: body.data.max_call_attempts,
+    callingPaused: body.data.calling_paused ?? undefined, updatedAt: new Date(),
   }).where(eq(businessesTable.id, BUSINESS_ID)).returning();
   if (!updated) { res.status(404).json({ error: "Business not found" }); return; }
   sendValidatedResponse(res, UpdateBusinessSettingsResponse, {
     id: updated.id, name: updated.name, market: updated.market, timezone: updated.timezone, phone_number: updated.phoneNumber, transfer_number: updated.transferNumber,
-    recording_disclosure: updated.recordingDisclosure, ai_disclosure: updated.aiDisclosure, quiet_hours: updated.quietHours, max_call_attempts: updated.maxCallAttempts, suppression_enabled: updated.suppressionEnabled,
+    recording_disclosure: updated.recordingDisclosure, ai_disclosure: updated.aiDisclosure, quiet_hours: updated.quietHours, max_call_attempts: updated.maxCallAttempts, suppression_enabled: updated.suppressionEnabled, calling_paused: updated.callingPaused,
     project_name: updated.projectName, services_or_property_types: updated.servicesOrPropertyTypes, approved_faq: updated.approvedFaq, qualification_questions: updated.qualificationQuestions, escalation_rules: updated.escalationRules, cal_event_type_id: updated.calEventTypeId, retell_agent_id: updated.retellAgentId,
   });
 });

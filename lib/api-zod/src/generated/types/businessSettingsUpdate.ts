@@ -22,4 +22,5 @@ export interface BusinessSettingsUpdate {
      * @maximum 10
      */
   max_call_attempts?: number;
+  calling_paused?: boolean;
 }

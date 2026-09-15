@@ -19,4 +19,5 @@ export interface Business {
   quiet_hours: string;
   max_call_attempts: number;
   suppression_enabled: boolean;
+  calling_paused: boolean;
 }

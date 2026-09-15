@@ -36,6 +36,13 @@
       "when": 1789028000000,
       "tag": "0004_consent_evidence_and_recipient_timezone",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789029000000,
+      "tag": "0005_calling_paused",
+      "breakpoints": true
     }
   ]
 }
