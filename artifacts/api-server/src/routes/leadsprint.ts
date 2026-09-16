@@ -66,6 +66,7 @@ import {
   buildOnboardingChecklist,
   liveCallingBlockedReason,
 } from "../lib/onboarding";
+import { dispatchQueuedCall, enqueueCallForLead } from "../lib/callQueue";
 import {
   AvailabilityError,
   BookingError,
@@ -448,67 +449,75 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const lead = await getLeadDto(body.data.lead_id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  // Already talking to this person — don't start a second call.
   const [existing] = await db.select().from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), eq(callsTable.status, "in_progress"))).limit(1);
   if (existing) { res.json(StartCallResponse.parse(await getCallDto(existing))); return; }
 
   const business = await getBusiness(BUSINESS_ID);
 
   // Setup gate: refuse to place live calls from a half-configured
-  // workspace. This runs BEFORE the policy gate and before any row is
-  // written, so an unfinished onboarding is an obvious 409 in the console
-  // rather than a mystery failure on a real prospect's phone.
+  // workspace, before any row is written, so an unfinished onboarding is
+  // an obvious error in the console rather than a mystery failure on a
+  // real prospect's phone.
   const setupBlocked = liveCallingBlockedReason(business);
   if (setupBlocked) {
     res.status(409).json({ error: setupBlocked, code: "SETUP_INCOMPLETE" });
     return;
   }
 
-  const [leadRow] = await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
-  const contactId = leadRow?.contactId ?? "";
-  const [contact] = contactId ? await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)) : [];
-  const priorAttempts = (await db.select({ id: callsTable.id }).from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), sql`${callsTable.status} != 'policy_blocked'`))).length;
-
-  const callId = id("call");
-
-  // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch.
-  const decision = evaluateCallPolicy({
-    business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-    contact: { consentStatus: contact?.consentStatus ?? "unknown", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
-    attemptsSoFar: priorAttempts,
+  // One shared implementation with the intake path and the cron worker
+  // (lib/callQueue.ts): enqueue idempotently, then dispatch — with the
+  // safety policy gate re-evaluated immediately before the provider
+  // request.
+  const queued = await enqueueCallForLead({
+    businessId: BUSINESS_ID,
+    leadId: body.data.lead_id,
+    idempotencyKey: `console_${id("attempt")}`,
+    source: "console",
   });
+  if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
 
-  if (!decision.allowed) {
-    const [blocked] = await db.insert(callsTable).values({
-      id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell",
-      idempotencyKey: `manual_${callId}`, status: "policy_blocked",
-      outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason,
-    }).returning();
-    await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "policy", title: `Call blocked for ${lead.name}`, detail: decision.message ?? "Blocked by call policy." });
-    res.status(409).json(StartCallResponse.parse(await getCallDto(blocked)));
+  const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
+  const current = dispatch.call ?? queued.call;
+
+  if (dispatch.outcome === "policy_blocked") {
+    res.status(409).json(StartCallResponse.parse(await getCallDto(current)));
+    return;
+  }
+  if (dispatch.outcome === "setup_incomplete") {
+    res.status(409).json({ error: dispatch.message, code: "SETUP_INCOMPLETE" });
+    return;
+  }
+  res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
+});
+
+/**
+ * POST /calls/:id/retry — operator recovery for a call whose provider
+ * state is uncertain or which failed. Re-queues the SAME call row under a
+ * fresh attempt rather than leaving the operator with a dead end. The
+ * policy gate runs again on dispatch, so a retry can still be blocked.
+ */
+router.post("/calls/:id/retry", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
+  const callId = typeof req.params.id === "string" ? req.params.id : "";
+  const [row] = await db.select().from(callsTable).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID)));
+  if (!row) { res.status(404).json({ error: "Call not found" }); return; }
+  if (!["uncertain", "failed", "policy_blocked"].includes(row.status)) {
+    res.status(409).json({ error: `Only uncertain, failed or policy-blocked calls can be retried; this one is ${row.status}.` });
     return;
   }
 
-  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
-  let current = created;
-  const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US");
-  if (liveRetell) {
-    try {
-      const live = await startRetellCall({
-        toNumber: lead.phone,
-        market: business?.market === "IN" ? "IN" : "US",
-        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id, call_id: callId },
-      });
-      [current] = await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Retell request failed";
-      [current] = await db.update(callsTable).set({ status: "uncertain", errorState: message, outcome: "Provider state uncertain", summary: "The call request could not be confirmed. Reconcile from the provider callback before retrying." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
-      req.log.error({ callId, err: message }, "Retell call start failed");
-    }
-  } else {
-    await db.insert(workflowJobsTable).values({ id: id("job"), businessId: BUSINESS_ID, type: "initiate_call", idempotencyKey: callId });
-  }
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "call", title: `Call ${liveRetell ? "started" : "queued"} for ${lead.name}`, detail: liveRetell ? "Retell accepted the call · awaiting signed callback" : "Demo mode · Retell credentials are not configured", });
-  res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
+  const queued = await enqueueCallForLead({
+    businessId: BUSINESS_ID,
+    leadId: row.leadId,
+    idempotencyKey: `retry_${row.id}_${id("attempt")}`,
+    source: "console",
+  });
+  if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
+  const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
+  const current = dispatch.call ?? queued.call;
+  res.status(dispatch.outcome === "started" ? 201 : 409).json(StartCallResponse.parse(await getCallDto(current)));
 });
 
 router.get("/appointments", async (_req, res): Promise<void> => {

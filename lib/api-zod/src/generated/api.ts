@@ -483,6 +483,32 @@ export const GetCallResponse = zod.object({
 
 
 /**
+ * Recovery action for a call whose provider state is uncertain. Queues a fresh attempt for the same lead; the safety policy gate runs again, so a retry can still be blocked.
+ * @summary Retry an uncertain, failed or policy-blocked call
+ */
+export const RetryCallParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const RetryCallResponse = zod.object({
+  "id": zod.string(),
+  "lead_id": zod.string(),
+  "lead_name": zod.string(),
+  "phone": zod.string(),
+  "provider": zod.string(),
+  "status": zod.enum(['created', 'policy_blocked', 'queued', 'provider_requesting', 'provider_accepted', 'in_progress', 'completed', 'failed', 'uncertain']),
+  "started_at": zod.string().nullable(),
+  "ended_at": zod.string().nullable(),
+  "duration_seconds": zod.number().nullable(),
+  "summary": zod.string(),
+  "outcome": zod.string(),
+  "transferred": zod.boolean(),
+  "booked": zod.boolean(),
+  "error_state": zod.string().nullable()
+})
+
+
+/**
  * @summary Get confirmed calendar availability
  */
 export const GetAvailabilityBody = zod.object({

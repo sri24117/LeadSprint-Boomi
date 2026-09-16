@@ -283,6 +283,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Call"
+  /calls/{id}/retry:
+    post:
+      operationId: retryCall
+      tags: [calls]
+      summary: Retry an uncertain, failed or policy-blocked call
+      description: >-
+        Recovery action for a call whose provider state is uncertain. Queues a
+        fresh attempt for the same lead; the safety policy gate runs again, so a
+        retry can still be blocked.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "201":
+          description: Retry started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "409":
+          description: Retry was queued but not started (policy or setup)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /appointments/availability:
     post:
       operationId: getAvailability

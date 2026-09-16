@@ -26,6 +26,11 @@ import {
   describeConsent,
   normalizeConsentEvidence,
 } from "../lib/consent";
+import {
+  dispatchQueuedCall,
+  enqueueCallForLead,
+  intakeIdempotencyKey,
+} from "../lib/callQueue";
 
 const router: IRouter = Router();
 
@@ -144,7 +149,50 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     nextAction: "Call lead",
   });
   await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: `Authenticated intake webhook accepted · ${describeConsent(consent)}` });
-  res.status(201).json({ accepted: true, lead_id: leadId, consent_status: consent.consentStatus });
+
+  // THE speed-to-lead step. Previously this webhook stopped at "lead
+  // created" and a human had to open the console and press Call, which
+  // makes the product an operator-assisted response desk, not LeadSprint.
+  // Intake now creates one idempotent call job and dispatches it
+  // immediately; the safety policy gate still runs inside
+  // dispatchQueuedCall, so consent/suppression/quiet hours/attempt limits
+  // and the kill switch are all enforced before any provider request.
+  const queued = await enqueueCallForLead({
+    businessId,
+    leadId,
+    idempotencyKey: intakeIdempotencyKey(leadId),
+    source: "intake",
+  });
+
+  let callState: { call_id?: string; status: string; detail?: string } = {
+    status: "not_queued",
+  };
+  if (queued) {
+    const dispatch = await dispatchQueuedCall({ businessId, callId: queued.call.id });
+    callState = {
+      call_id: queued.call.id,
+      status: dispatch.outcome,
+      detail: dispatch.message,
+    };
+    if (dispatch.outcome !== "started") {
+      // A call that could not be placed right now is not lost: the
+      // workflow job stays queued and POST /api/cron/process-jobs retries
+      // it under the same idempotency key. Non-retryable outcomes (e.g.
+      // revoked consent) are already recorded as policy_blocked and are
+      // operator-visible.
+      req.log.warn(
+        { businessId, leadId, callId: queued.call.id, outcome: dispatch.outcome },
+        "Intake call was not started immediately",
+      );
+    }
+  }
+
+  res.status(201).json({
+    accepted: true,
+    lead_id: leadId,
+    consent_status: consent.consentStatus,
+    call: callState,
+  });
 });
 
 router.post("/webhooks/retell", async (req, res): Promise<void> => {

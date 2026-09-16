@@ -1218,6 +1218,78 @@ export function useGetCall<TData = Awaited<ReturnType<typeof getCall>>, TError =
 
 
 
+export const getRetryCallUrl = (id: string,) => {
+
+
+
+
+  return `/api/calls/${id}/retry`
+}
+
+/**
+ * Recovery action for a call whose provider state is uncertain. Queues a fresh attempt for the same lead; the safety policy gate runs again, so a retry can still be blocked.
+ * @summary Retry an uncertain, failed or policy-blocked call
+ */
+export const retryCall = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Call> => {
+
+  return customFetch<Call>(getRetryCallUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getRetryCallMutationOptions = <TError = ErrorType<NotFoundResponse | Call>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryCall>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof retryCall>>, TError,{id: string}, TContext> => {
+
+const mutationKey = ['retryCall'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retryCall>>, {id: string}> = (props) => {
+          const {id} = props ?? {};
+
+          return  retryCall(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetryCallMutationResult = NonNullable<Awaited<ReturnType<typeof retryCall>>>
+
+    export type RetryCallMutationError = ErrorType<NotFoundResponse | Call>
+
+    /**
+ * @summary Retry an uncertain, failed or policy-blocked call
+ */
+export const useRetryCall = <TError = ErrorType<NotFoundResponse | Call>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryCall>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof retryCall>>,
+        TError,
+        {id: string},
+        TContext
+      > => {
+      return useMutation(getRetryCallMutationOptions(options));
+    }
+
 export const getGetAvailabilityUrl = () => {
 
 

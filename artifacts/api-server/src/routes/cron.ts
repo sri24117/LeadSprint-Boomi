@@ -14,8 +14,7 @@ import {
   usersTable,
   workflowJobsTable,
 } from "@workspace/db";
-import { evaluateCallPolicy } from "../lib/policy";
-import { hasRetellConfigForMarket, startRetellCall } from "../lib/providers";
+import { dispatchQueuedCall } from "../lib/callQueue";
 import { sendWeeklyReportEmail } from "../lib/mailer";
 
 const router: IRouter = Router();
@@ -59,14 +58,15 @@ router.post("/cron/retention", async (req, res): Promise<void> => {
 });
 
 /**
- * POST /api/cron/process-jobs — processes the "initiate_call" workflow
- * jobs created when a call was queued while Retell wasn't configured yet
- * (see POST /calls/start in routes/leadsprint.ts). Without this, a job
- * created during Phase 1 demo mode sits in the queue forever, even after
- * real Retell credentials are added later — this is what actually drains
- * that backlog. Every attempt re-runs the full safety policy gate; it
- * never bypasses consent, suppression, quiet hours, or attempt limits
- * just because a job is old.
+ * POST /api/cron/process-jobs — the worker that drains the outbound call
+ * queue. Every "initiate_call" job created by the intake webhook, the
+ * operator console, or a previous deferred attempt is retried here under
+ * its original idempotency key, so a retry can never place a second call.
+ *
+ * Every attempt re-runs the setup gate and the full safety policy gate
+ * via lib/callQueue.ts's dispatchQueuedCall — a job never bypasses
+ * consent, suppression, quiet hours, attempt limits or the kill switch
+ * just because it is old.
  */
 router.post("/cron/process-jobs", async (req, res): Promise<void> => {
   const secret = process.env["CRON_SECRET"];
@@ -85,74 +85,63 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
     .orderBy(asc(workflowJobsTable.availableAt))
     .limit(25);
 
-  let attempted = 0;
   let started = 0;
   let blocked = 0;
-  let skippedNotConfigured = 0;
+  let deferred = 0;
   let failed = 0;
+  let alreadyHandled = 0;
 
   for (const job of jobs) {
-    const [call] = await db.select().from(callsTable).where(and(eq(callsTable.id, job.idempotencyKey), eq(callsTable.businessId, job.businessId)));
-    if (!call || call.status !== "queued") {
-      // Already handled through another path (manual retry, webhook, etc).
-      await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-      continue;
-    }
+    // The job's idempotency key IS the call id it was created for (see
+    // lib/callQueue.ts). One shared dispatcher runs the setup gate, the
+    // full safety policy gate, and the provider request — a job being old
+    // never bypasses any of them.
+    const result = await dispatchQueuedCall({ businessId: job.businessId, callId: job.idempotencyKey });
+    const nextAttempts = job.attempts + 1;
 
-    const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, job.businessId));
-    const market = business?.market === "IN" ? "IN" : "US";
-    if (!hasRetellConfigForMarket(market)) {
-      skippedNotConfigured += 1;
-      continue; // leave queued; no credentials yet, don't burn an attempt
-    }
+    switch (result.outcome) {
+      case "started":
+        started += 1;
+        await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
+        break;
 
-    attempted += 1;
-    const [contact] = await db.select().from(contactsTable).where(eq(contactsTable.id, call.contactId));
-    const priorAttempts = (
-      await db.select({ id: callsTable.id }).from(callsTable).where(
-        and(eq(callsTable.leadId, call.leadId), eq(callsTable.businessId, job.businessId), ne(callsTable.id, call.id)),
-      )
-    ).length;
+      case "already_handled":
+        alreadyHandled += 1;
+        await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
+        break;
 
-    const decision = evaluateCallPolicy({
-      business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-      contact: { consentStatus: contact?.consentStatus ?? "unknown", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
-      attemptsSoFar: priorAttempts,
-    });
+      case "setup_incomplete":
+      case "provider_not_configured":
+        // Not the lead's fault and not a wasted attempt — leave the job
+        // queued so the backlog drains by itself once the workspace is
+        // finished being configured.
+        deferred += 1;
+        await db.update(workflowJobsTable).set({ availableAt: new Date(now.getTime() + 15 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
+        break;
 
-    if (!decision.allowed) {
-      blocked += 1;
-      await db.update(callsTable).set({ status: "policy_blocked", outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason }).where(eq(callsTable.id, call.id));
-      const nextAttempts = job.attempts + 1;
-      if (decision.reason === "quiet_hours" && nextAttempts < MAX_JOB_ATTEMPTS) {
-        // Quiet hours resolve themselves with time — worth another look later.
-        await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 30 * 60 * 1000), lastError: decision.message }).where(eq(workflowJobsTable.id, job.id));
-      } else {
-        await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: decision.message }).where(eq(workflowJobsTable.id, job.id));
-      }
-      continue;
-    }
+      case "policy_blocked":
+        blocked += 1;
+        if (result.retryable && nextAttempts < MAX_JOB_ATTEMPTS) {
+          // Quiet hours resolve themselves with time — worth another look.
+          await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 30 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
+        } else {
+          await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
+        }
+        break;
 
-    try {
-      const live = await startRetellCall({ toNumber: contact?.phone ?? "", market, metadata: { business_id: job.businessId, lead_id: call.leadId, call_id: call.id } });
-      started += 1;
-      await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(eq(callsTable.id, call.id));
-      await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-      await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId: job.businessId, type: "call", title: "Queued call started by scheduler", detail: "Retell credentials became available; the backlog job was processed." });
-    } catch (error) {
-      failed += 1;
-      const message = error instanceof Error ? error.message : "Retell request failed";
-      await db.update(callsTable).set({ status: "uncertain", errorState: message, outcome: "Provider state uncertain" }).where(eq(callsTable.id, call.id));
-      const nextAttempts = job.attempts + 1;
-      if (nextAttempts < MAX_JOB_ATTEMPTS) {
-        await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 10 * 60 * 1000), lastError: message }).where(eq(workflowJobsTable.id, job.id));
-      } else {
-        await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: message }).where(eq(workflowJobsTable.id, job.id));
-      }
+      case "provider_uncertain":
+      default:
+        failed += 1;
+        if (nextAttempts < MAX_JOB_ATTEMPTS) {
+          await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 10 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
+        } else {
+          await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
+        }
+        break;
     }
   }
 
-  res.json({ jobs_seen: jobs.length, attempted, started, blocked, skipped_not_configured: skippedNotConfigured, failed });
+  res.json({ jobs_seen: jobs.length, started, blocked, deferred, failed, already_handled: alreadyHandled });
 });
 
 /**
