@@ -171,7 +171,27 @@ replay same callback -> {"accepted":true,"duplicate":true}   (no second write)
 unsigned callback    -> 401 {"error":"Invalid Retell signature"}
 ```
 
-### 3.9 The console renders every call state
+### 3.9 The Twilio status callback cannot cross workspaces
+
+The Twilio status callback must name its workspace — configure the status
+callback URL as
+`POST /api/webhooks/twilio/status?businessId=<business_id>`
+(an internal gateway may instead send a `BusinessId` form field). Verified
+against a real database with two workspaces holding the same CallSid:
+
+```
+callback ?businessId=A, CallSid owned by A -> 202, A's call updated, B's untouched
+callback with no businessId                -> 400, no call touched, no event written
+callback ?businessId=B, CallSid owned by A -> 400, no event written, A's call untouched
+replayed callback                          -> {"accepted":true,"duplicate":true}
+```
+
+LeadSprint never guesses the tenant by looking up `provider_call_id` across
+workspaces, and `calls_provider_call_unique` is scoped by `business_id`, so
+two workspaces can hold the same provider call id without one blocking the
+other.
+
+### 3.10 The console renders every call state
 
 `GET /api/calls` after the above:
 
@@ -189,24 +209,30 @@ action in the call drawer.
 
 ```bash
 pnpm --filter @workspace/api-server run typecheck   # clean
-pnpm --filter @workspace/api-server run test        # 87 tests
+pnpm --filter @workspace/api-server run test        # 96 tests
 pnpm --filter @workspace/leadsprint run typecheck   # clean
 pnpm --filter @workspace/leadsprint run test        # 12 tests
 ```
 
-Note: the repo-wide `pnpm run typecheck` exits non-zero because of a
-pre-existing error in `artifacts/mockup-sandbox/vite.config.ts`. Verify
-per package until that is fixed.
+Repo-wide `pnpm run typecheck` is green again — the pre-existing
+`artifacts/mockup-sandbox/vite.config.ts` error that used to make CI's
+typecheck gate vacuous was fixed in the Days 1–8 merge, so a green run now
+actually means something. Per-package checks remain the fast inner loop.
 
 ## 5. Still open before a live pilot
 
-These are Day 9–10 hardening items, deliberately not yet done:
+Closed in Days 9–10:
+
+- ~~The `calls_provider_call_unique` constraint is global rather than scoped
+  by `business_id`, and the Twilio status webhook looks up calls across
+  tenants~~ — the index is now `(business_id, provider, provider_call_id)`
+  and the Twilio callback must name its workspace (§3.9).
+
+Still open:
 
 - `/usage` hard-codes the period label `"September 2026"` instead of deriving
   it from the billing period.
 - `/today` hard-codes `unresolved_messages: 1`.
-- The `calls_provider_call_unique` constraint is global rather than scoped by
-  `business_id`, and the Twilio status webhook looks up calls across tenants.
 - `app.use(cors())` is fully open.
 - No rate limiting on the webhook or cron routes.
 - The Dockerfile runs as root.

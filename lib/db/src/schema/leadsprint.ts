@@ -111,7 +111,12 @@ export const callsTable = pgTable("calls", {
   errorState: text("error_state"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  providerCallUnique: uniqueIndex("calls_provider_call_unique").on(table.provider, table.providerCallId),
+  // Provider call ids are only unique within a tenant: two workspaces may
+  // legitimately hold the same provider id (separate Twilio subaccounts,
+  // stub/dev ids), and a global constraint would make the second business's
+  // insert fail — while a global index is exactly what a cross-tenant
+  // webhook lookup would scan. Always scope by business_id.
+  providerCallUnique: uniqueIndex("calls_provider_call_unique").on(table.businessId, table.provider, table.providerCallId),
   idempotencyUnique: uniqueIndex("calls_business_idempotency_unique").on(table.businessId, table.idempotencyKey),
 }));
 
