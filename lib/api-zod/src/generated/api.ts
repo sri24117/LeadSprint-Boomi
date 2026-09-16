@@ -196,7 +196,12 @@ export const GetLeadsResponseItem = zod.object({
   "status": zod.enum(['new', 'contacted', 'qualified', 'booked', 'closed', 'suppressed']),
   "suppressed": zod.boolean(),
   "last_call": zod.string().nullable(),
-  "created_at": zod.string()
+  "created_at": zod.string(),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']),
+  "consent_source": zod.string().nullable(),
+  "consent_at": zod.string().nullable(),
+  "consent_detail": zod.string(),
+  "callable": zod.boolean()
 })
 export const GetLeadsResponse = zod.array(GetLeadsResponseItem)
 
@@ -216,7 +221,10 @@ export const ImportLeadsBody = zod.object({
   "property_type": zod.string().optional(),
   "budget_label": zod.string().optional(),
   "timeline": zod.string().optional()
-}))
+})),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']).optional(),
+  "consent_source": zod.string().optional().describe('Where and how consent was captured for this batch. Required when consent_status is \"valid\".'),
+  "consent_at": zod.coerce.date().optional()
 })
 
 export const importLeadsResponseLeadsItemIntentScoreMin = 0;
@@ -249,7 +257,12 @@ export const ImportLeadsResponse = zod.object({
   "status": zod.enum(['new', 'contacted', 'qualified', 'booked', 'closed', 'suppressed']),
   "suppressed": zod.boolean(),
   "last_call": zod.string().nullable(),
-  "created_at": zod.string()
+  "created_at": zod.string(),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']),
+  "consent_source": zod.string().nullable(),
+  "consent_at": zod.string().nullable(),
+  "consent_detail": zod.string(),
+  "callable": zod.boolean()
 }))
 })
 
@@ -288,7 +301,12 @@ export const GetLeadResponse = zod.object({
   "status": zod.enum(['new', 'contacted', 'qualified', 'booked', 'closed', 'suppressed']),
   "suppressed": zod.boolean(),
   "last_call": zod.string().nullable(),
-  "created_at": zod.string()
+  "created_at": zod.string(),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']),
+  "consent_source": zod.string().nullable(),
+  "consent_at": zod.string().nullable(),
+  "consent_detail": zod.string(),
+  "callable": zod.boolean()
 })
 
 
@@ -332,7 +350,12 @@ export const UpdateLeadResponse = zod.object({
   "status": zod.enum(['new', 'contacted', 'qualified', 'booked', 'closed', 'suppressed']),
   "suppressed": zod.boolean(),
   "last_call": zod.string().nullable(),
-  "created_at": zod.string()
+  "created_at": zod.string(),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']),
+  "consent_source": zod.string().nullable(),
+  "consent_at": zod.string().nullable(),
+  "consent_detail": zod.string(),
+  "callable": zod.boolean()
 })
 
 
@@ -374,7 +397,12 @@ export const SuppressLeadResponse = zod.object({
   "status": zod.enum(['new', 'contacted', 'qualified', 'booked', 'closed', 'suppressed']),
   "suppressed": zod.boolean(),
   "last_call": zod.string().nullable(),
-  "created_at": zod.string()
+  "created_at": zod.string(),
+  "consent_status": zod.enum(['unknown', 'valid', 'revoked']),
+  "consent_source": zod.string().nullable(),
+  "consent_at": zod.string().nullable(),
+  "consent_detail": zod.string(),
+  "callable": zod.boolean()
 })
 
 
@@ -509,6 +537,22 @@ export const GetAppointmentsResponseItem = zod.object({
   "status": zod.enum(['confirmed', 'cancelled', 'needs_review'])
 })
 export const GetAppointmentsResponse = zod.array(GetAppointmentsResponseItem)
+
+
+/**
+ * @summary Pilot setup checklist and live-calling readiness
+ */
+export const GetOnboardingChecklistResponse = zod.object({
+  "ready_for_live_calls": zod.boolean(),
+  "items": zod.array(zod.object({
+  "key": zod.string(),
+  "label": zod.string(),
+  "complete": zod.boolean(),
+  "severity": zod.enum(['required', 'recommended']),
+  "detail": zod.string()
+})),
+  "missing_required": zod.array(zod.string())
+})
 
 
 /**

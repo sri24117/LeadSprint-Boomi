@@ -116,7 +116,7 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
 
     const decision = evaluateCallPolicy({
       business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-      contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
+      contact: { consentStatus: contact?.consentStatus ?? "unknown", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
       attemptsSoFar: priorAttempts,
     });
 

@@ -21,6 +21,11 @@ import {
   verifyWebhookSignature,
 } from "../lib/providers";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
+import {
+  ConsentEvidenceError,
+  describeConsent,
+  normalizeConsentEvidence,
+} from "../lib/consent";
 
 const router: IRouter = Router();
 
@@ -98,9 +103,30 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     res.status(200).json({ accepted: false, reason: "duplicate" });
     return;
   }
+  // Launch gate: the signed intake payload must carry explicit consent
+  // evidence. A lead with no recorded reason it is lawful to call lands as
+  // "unknown" and is never dialed — the policy gate blocks it and the
+  // console shows why. `consent_status: "valid"` without a
+  // `consent_source` is rejected outright rather than silently downgraded,
+  // so a miswired lead source is visible to whoever integrated it.
+  let consent;
+  try {
+    consent = normalizeConsentEvidence({
+      status: body.consent_status,
+      source: body.consent_source,
+      at: body.consent_at,
+    });
+  } catch (error) {
+    if (error instanceof ConsentEvidenceError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+
   const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
   const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null, timezone: timezoneForUSPhoneNumber(phone) });
+  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null, timezone: timezoneForUSPhoneNumber(phone), consentStatus: consent.consentStatus, consentSource: consent.consentSource, consentAt: consent.consentAt });
   await db.insert(leadsTable).values({
     id: leadId,
     businessId,
@@ -117,8 +143,8 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     status: "new",
     nextAction: "Call lead",
   });
-  await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: "Authenticated intake webhook accepted" });
-  res.status(201).json({ accepted: true, lead_id: leadId });
+  await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: `Authenticated intake webhook accepted · ${describeConsent(consent)}` });
+  res.status(201).json({ accepted: true, lead_id: leadId, consent_status: consent.consentStatus });
 });
 
 router.post("/webhooks/retell", async (req, res): Promise<void> => {

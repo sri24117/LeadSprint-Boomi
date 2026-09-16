@@ -4,6 +4,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
+import { WorkspaceScopeError } from "./routes/leadsprint";
 import { logger } from "./lib/logger";
 import {
   CLERK_PROXY_PATH,
@@ -86,8 +87,17 @@ app.use(
     res: express.Response,
     _next: express.NextFunction,
   ) => {
-    req.log?.error({ err }, "Unhandled API error");
     if (res.headersSent) return;
+    // A request that reached a handler with no resolved workspace is an
+    // auth problem, not a server fault — and it must never be answered
+    // with another tenant's (or the demo workspace's) data. See
+    // WorkspaceScopeError in routes/leadsprint.ts.
+    if (err instanceof WorkspaceScopeError) {
+      req.log?.warn({ err: err.message }, "Request had no workspace scope");
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    req.log?.error({ err }, "Unhandled API error");
     res.status(500).json({ error: "Internal server error" });
   },
 );

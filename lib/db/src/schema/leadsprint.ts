@@ -50,7 +50,17 @@ export const contactsTable = pgTable("contacts", {
   phone: text("phone").notNull(),
   email: text("email"),
   preferredLanguage: text("preferred_language").notNull().default("en"),
-  consentStatus: text("consent_status").notNull().default("valid"),
+  // Launch gate: a contact is NOT callable until someone records why it is
+  // lawful to call them. The old default ("valid") meant any row created by
+  // intake or CSV import became callable with no evidence at all, so the
+  // default is now "unknown" and the policy gate blocks it. Valid values:
+  // unknown | valid | revoked.
+  consentStatus: text("consent_status").notNull().default("unknown"),
+  // Evidence for the consent decision: where it came from (e.g.
+  // "web_form:listing-enquiry", "csv:2026-09-16 seller list", "verbal") and
+  // when it was captured. Both are required before consent may be "valid".
+  consentSource: text("consent_source"),
+  consentAt: timestamp("consent_at", { withTimezone: true }),
   suppressedAt: timestamp("suppressed_at", { withTimezone: true }),
   // Called-party IANA timezone, derived from the phone number's area code
   // at intake (see lib/areaCodeTimezones.ts). NULL means "we couldn't

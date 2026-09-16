@@ -38,6 +38,7 @@ import type {
   LeadUpdate,
   LoginInput,
   NotFoundResponse,
+  OnboardingChecklist,
   ReadinessStatus,
   Slot,
   StartCallInput,
@@ -1424,6 +1425,83 @@ export function useGetAppointments<TData = Awaited<ReturnType<typeof getAppointm
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetAppointmentsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetOnboardingChecklistUrl = () => {
+
+
+
+
+  return `/api/onboarding/checklist`
+}
+
+/**
+ * @summary Pilot setup checklist and live-calling readiness
+ */
+export const getOnboardingChecklist = async ( options?: Parameters<typeof customFetch>[1]): Promise<OnboardingChecklist> => {
+
+  return customFetch<OnboardingChecklist>(getGetOnboardingChecklistUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetOnboardingChecklistQueryKey = () => {
+    return [
+    `/api/onboarding/checklist`
+    ] as const;
+    }
+
+
+export const getGetOnboardingChecklistQueryOptions = <TData = Awaited<ReturnType<typeof getOnboardingChecklist>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOnboardingChecklist>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetOnboardingChecklistQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getOnboardingChecklist>>> = ({ signal }) => getOnboardingChecklist({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getOnboardingChecklist>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetOnboardingChecklistQueryResult = NonNullable<Awaited<ReturnType<typeof getOnboardingChecklist>>>
+export type GetOnboardingChecklistQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Pilot setup checklist and live-calling readiness
+ */
+
+export function useGetOnboardingChecklist<TData = Awaited<ReturnType<typeof getOnboardingChecklist>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOnboardingChecklist>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetOnboardingChecklistQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
