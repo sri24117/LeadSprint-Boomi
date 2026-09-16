@@ -7,7 +7,7 @@ import {
   businessesTable,
   callsTable,
   contactsTable,
-  db,
+  db as defaultDb,
   leadsTable,
   providerEventsTable,
   usageTable,
@@ -33,6 +33,18 @@ import {
 } from "../lib/callQueue";
 
 const router: IRouter = Router();
+
+// Overridable database handle — see lib/callQueue.ts for why the
+// acceptance tests run against a real embedded PostgreSQL rather than a mock.
+let db: typeof defaultDb = defaultDb;
+
+export function __setWebhooksDb(next: typeof defaultDb): void {
+  db = next;
+}
+
+export function __resetWebhooksDb(): void {
+  db = defaultDb;
+}
 
 function rawBody(req: Request): Buffer {
   return (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
@@ -303,12 +315,31 @@ router.post("/webhooks/twilio/status", async (req, res): Promise<void> => {
   }
   const body = req.body as Record<string, unknown>;
   const callId = typeof body.CallSid === "string" ? body.CallSid : "";
-  const [callRow] = callId
-    ? await db.select({ businessId: callsTable.businessId }).from(callsTable).where(eq(callsTable.providerCallId, callId)).limit(1)
-    : [];
-  const businessId = typeof body.BusinessId === "string" ? body.BusinessId : callRow?.businessId;
+  // Tenant identity must travel WITH the webhook: a `businessId` query
+  // parameter on the configured status-callback URL, or a `BusinessId` field
+  // from an internal gateway. Looking the tenant up by `provider_call_id`
+  // across all businesses would let one tenant's signed status webhook land
+  // on another tenant's call, so it is deliberately not done — an unscoped
+  // callback is rejected, never guessed.
+  const businessId =
+    (typeof body.BusinessId === "string" && body.BusinessId) ||
+    (typeof req.query.businessId === "string" && req.query.businessId) ||
+    "";
   if (!callId || !businessId) {
-    res.status(400).json({ error: "CallSid must match a known LeadSprint call" });
+    res.status(400).json({ error: "CallSid and a business-scoped callback (businessId) are required" });
+    return;
+  }
+  // Calls are persisted before any provider work, so the CallSid must
+  // already exist for THIS business. Rejecting unknown pairs keeps a
+  // misconfigured (or foreign) callback from writing provider events or
+  // call state into the wrong tenant.
+  const [callRow] = await db
+    .select({ id: callsTable.id })
+    .from(callsTable)
+    .where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)))
+    .limit(1);
+  if (!callRow) {
+    res.status(400).json({ error: "CallSid must match a known LeadSprint call for this business" });
     return;
   }
   const accepted = await acceptProviderEvent({ businessId, provider: "Twilio", externalEventId: eventId(req, body), eventType: typeof body.CallStatus === "string" ? body.CallStatus : "status", payload: body });

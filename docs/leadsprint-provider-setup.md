@@ -47,7 +47,13 @@ Required for a configured carrier route:
 
 Twilio status callbacks go to:
 
-`POST /api/webhooks/twilio/status`
+`POST /api/webhooks/twilio/status?businessId=<business_id>`
+
+The callback URL must carry the workspace's `businessId` (an internal gateway
+may instead add a `BusinessId` form field). Callbacks without a workspace
+scope are rejected with `400` — LeadSprint never guesses the tenant by
+looking up the CallSid across workspaces, so an unscoped callback silently
+updates nothing rather than risking another tenant's call record.
 
 The route accepts Twilio's standard `X-Twilio-Signature`. A
 `TWILIO_WEBHOOK_SECRET` HMAC signature is also supported for an internal
