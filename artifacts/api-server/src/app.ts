@@ -1,11 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { WorkspaceScopeError } from "./routes/leadsprint";
 import { logger } from "./lib/logger";
+import { createCorsMiddleware } from "./middlewares/cors";
 import {
   CLERK_PROXY_PATH,
   clerkProxyMiddleware,
@@ -51,7 +51,10 @@ app.use(
   }),
 );
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-app.use(cors());
+// Scoped CORS (middlewares/cors.ts): exact-allowlist when CORS_ORIGINS is
+// set, loopback-only in non-production, no CORS headers at all in
+// production. The old bare cors() reflected any origin.
+app.use(createCorsMiddleware());
 app.use(express.json({
   verify: (req, _res, buffer) => {
     (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);

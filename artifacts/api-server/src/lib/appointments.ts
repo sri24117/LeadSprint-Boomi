@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   activitiesTable,
   appointmentsTable,
@@ -6,7 +6,6 @@ import {
   contactsTable,
   db as defaultDb,
   leadsTable,
-  usageTable,
 } from "@workspace/db";
 import {
   createCalBooking,
@@ -14,6 +13,7 @@ import {
   providerConfig,
   ProviderRequestError,
 } from "./providers";
+import { recordBooking } from "./usage";
 
 function id(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -205,8 +205,10 @@ export async function bookAppointmentForLead(input: {
     title: `Appointment booked for ${lead.contact.name}`,
     detail: source === "agent" ? "Booked live by the AI agent mid-call; Cal.com verification complete." : "Cal.com verification complete",
   });
-  const [usage] = await db.select().from(usageTable).where(eq(usageTable.businessId, businessId)).limit(1);
-  if (usage) await db.update(usageTable).set({ bookingCount: sql`${usageTable.bookingCount} + 1` }).where(and(eq(usageTable.id, usage.id), eq(usageTable.businessId, businessId)));
+  // Counted against the current month's usage row (created on demand) —
+  // the old lookup grabbed whichever row the database returned first,
+  // which stopped being well-defined once periods became monthly.
+  await recordBooking(db, businessId);
 
   return created;
 }

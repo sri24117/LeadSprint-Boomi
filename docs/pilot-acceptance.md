@@ -209,7 +209,7 @@ action in the call drawer.
 
 ```bash
 pnpm --filter @workspace/api-server run typecheck   # clean
-pnpm --filter @workspace/api-server run test        # 96 tests
+pnpm --filter @workspace/api-server run test        # 131 tests
 pnpm --filter @workspace/leadsprint run typecheck   # clean
 pnpm --filter @workspace/leadsprint run test        # 12 tests
 ```
@@ -228,12 +228,40 @@ Closed in Days 9–10:
   tenants~~ — the index is now `(business_id, provider, provider_call_id)`
   and the Twilio callback must name its workspace (§3.9).
 
+Closed in Days 11–12:
+
+- ~~`/usage` hard-codes the period label `"September 2026"`~~ — usage is
+  now one row per business per calendar month with lazy rollover
+  (`lib/usage.ts`); the label comes from the row's own `period_start`,
+  and the Retell/appointment writers attribute to the current month.
+- ~~`/today` hard-codes `unresolved_messages: 1`~~ — now the trailing-7-day
+  count of message-type activities (caller messages and failed-transfer
+  captures awaiting operator follow-up). A true resolve workflow is still
+  future work.
+- ~~`app.use(cors())` is fully open~~ — exact-allowlist via `CORS_ORIGINS`,
+  loopback-only in non-production, no CORS headers at all in production;
+  denied origins get 403 JSON (`middlewares/cors.ts`).
+- ~~No rate limiting on the webhook or cron routes~~ — per-IP ceilings on
+  the webhook (600), agent (300) and cron (60) routers per 15 minutes,
+  env-overridable, in-memory store (`middlewares/rateLimit.ts`).
+  Multi-instance deployments need a shared store before scaling out.
+- ~~The Dockerfile runs as root~~ — the runtime stage runs as the
+  unprivileged `node` user; verified by serving traffic from the
+  production bundle as `nobody`.
+- ~~No backup/restore procedure has been exercised~~ —
+  `scripts/backup/backup.sh` + `restore-verify.sh` round-tripped the
+  production schema with real data on PostgreSQL 16.2 (schema identical,
+  data identical), and CI re-exercises it on every run. Runbook:
+  `docs/backup-restore.md`. Coolify scheduled backups to S3 must still
+  be configured on the production database before onboarding a pilot.
+
 Still open:
 
-- `/usage` hard-codes the period label `"September 2026"` instead of deriving
-  it from the billing period.
-- `/today` hard-codes `unresolved_messages: 1`.
-- `app.use(cors())` is fully open.
-- No rate limiting on the webhook or cron routes.
-- The Dockerfile runs as root.
-- No backup/restore procedure has been exercised.
+- Coolify scheduled database backups (nightly, S3, 14-day retention) are
+  documented but not yet configured — needs the production database to
+  exist first.
+- `/reports/weekly` still labels its window `"This week · pilot report"`
+  while counting all-time rows; decide whether the pilot report is
+  trailing-7-days before anyone quotes it.
+- Message resolve workflow (see above): `unresolved_messages` ages items
+  out after 7 days rather than tracking real resolution.

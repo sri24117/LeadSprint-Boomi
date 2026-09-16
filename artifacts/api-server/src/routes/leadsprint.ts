@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { Router, type IRouter } from "express";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { and, desc, eq, gte, ilike, or, sql } from "drizzle-orm";
+import { db as defaultDb } from "@workspace/db";
 import {
   activitiesTable,
   appointmentsTable,
@@ -67,6 +67,7 @@ import {
   liveCallingBlockedReason,
 } from "../lib/onboarding";
 import { dispatchQueuedCall, enqueueCallForLead } from "../lib/callQueue";
+import { getCurrentUsageRow, periodLabel } from "../lib/usage";
 import {
   AvailabilityError,
   BookingError,
@@ -77,6 +78,20 @@ import {
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
+
+// Overridable database handle — see lib/callQueue.ts for why the
+// acceptance tests run against a real embedded PostgreSQL rather than a
+// mock.
+let db: typeof defaultDb = defaultDb;
+
+export function __setLeadsprintDb(next: typeof defaultDb): void {
+  db = next;
+}
+
+export function __resetLeadsprintDb(): void {
+  db = defaultDb;
+}
+
 const BUSINESS_ID = "business_demo";
 const USER_ID = "user_demo";
 
@@ -624,6 +639,13 @@ router.get("/today", async (_req, res): Promise<void> => {
   const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")));
   const activities = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(8);
   const upcoming = await Promise.all(appointments.map((row) => getAppointmentDto(row, BUSINESS_ID)));
+  // Message-type activities are the operator's follow-up queue: caller
+  // messages captured mid-call and failed-transfer captures. There is no
+  // resolve workflow yet, so "unresolved" is scoped to the trailing 7
+  // days — recent items awaiting action — rather than an all-time count
+  // that could never go down or the hard-coded 1 that used to sit here.
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const recentMessages = await db.select({ id: activitiesTable.id }).from(activitiesTable).where(and(eq(activitiesTable.businessId, BUSINESS_ID), eq(activitiesTable.type, "message"), gte(activitiesTable.createdAt, weekAgo)));
   const warnings = [
     ...(hasRetellConfigForMarket() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
     ...(hasCalConfig() ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
@@ -632,7 +654,7 @@ router.get("/today", async (_req, res): Promise<void> => {
   ];
   res.json(GetTodayResponse.parse({
     date_label: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: business?.timezone ?? "UTC" }).format(new Date()),
-    metrics: { new_leads: leads.filter((lead) => lead.status === "new").length, calls_in_progress: calls.filter((call) => call.status === "in_progress").length, hot_leads: leads.filter((lead) => lead.score === "hot").length, appointments_today: appointments.length, failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, unresolved_messages: 1 },
+    metrics: { new_leads: leads.filter((lead) => lead.status === "new").length, calls_in_progress: calls.filter((call) => call.status === "in_progress").length, hot_leads: leads.filter((lead) => lead.score === "hot").length, appointments_today: appointments.length, failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, unresolved_messages: recentMessages.length },
     setup_warnings: warnings,
     upcoming,
     recent_activity: activities.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() })),
@@ -645,15 +667,18 @@ router.get("/reports/weekly", async (_req, res): Promise<void> => {
   const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
   const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
   const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, BUSINESS_ID));
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
+  const usage = await getCurrentUsageRow(db, BUSINESS_ID);
   res.json(GetWeeklyReportResponse.parse({ period_label: "This week · pilot report", leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: Number(usage?.voiceMinutes ?? 0), estimated_provider_cost: Number(usage?.estimatedCost ?? 0) }));
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
-  const usage = (await db.select().from(usageTable).where(eq(usageTable.businessId, BUSINESS_ID)))[0];
-  res.json(GetUsageResponse.parse({ period_label: "September 2026", voice_minutes: Number(usage?.voiceMinutes ?? 0), included_minutes: 300, sms_count: usage?.smsCount ?? 0, booking_count: usage?.bookingCount ?? 0, estimated_cost: Number(usage?.estimatedCost ?? 0) }));
+  // Monthly period row, created at zero on first use — the label comes
+  // from the row's own periodStart, so it can never drift from the
+  // numbers the way the old hard-coded "September 2026" did.
+  const usage = await getCurrentUsageRow(db, BUSINESS_ID);
+  res.json(GetUsageResponse.parse({ period_label: periodLabel(usage.periodStart), voice_minutes: Number(usage?.voiceMinutes ?? 0), included_minutes: 300, sms_count: usage?.smsCount ?? 0, booking_count: usage?.bookingCount ?? 0, estimated_cost: Number(usage?.estimatedCost ?? 0) }));
 });
 
 export default router;

@@ -7,17 +7,35 @@ import {
   businessesTable,
   callsTable,
   contactsTable,
-  db,
+  db as defaultDb,
   leadsTable,
   providerEventsTable,
-  usageTable,
   usersTable,
   workflowJobsTable,
 } from "@workspace/db";
 import { dispatchQueuedCall } from "../lib/callQueue";
 import { sendWeeklyReportEmail } from "../lib/mailer";
+import { getCurrentUsageRow } from "../lib/usage";
+import { createCronLimiter } from "../middlewares/rateLimit";
 
 const router: IRouter = Router();
+
+// Overridable database handle — see lib/callQueue.ts for why the
+// acceptance tests run against a real embedded PostgreSQL rather than a
+// mock.
+let db: typeof defaultDb = defaultDb;
+
+export function __setCronDb(next: typeof defaultDb): void {
+  db = next;
+}
+
+export function __resetCronDb(): void {
+  db = defaultDb;
+}
+
+// The scheduler calls each endpoint a few times an hour; anything more is
+// a misconfiguration or a flood, and the per-IP ceiling is set for that.
+router.use(createCronLimiter());
 
 const DEFAULT_RETENTION_DAYS = 90;
 
@@ -170,7 +188,7 @@ router.post("/cron/weekly-report", async (req, res): Promise<void> => {
     const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, business.id));
     const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, business.id));
     const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, business.id));
-    const [usage] = await db.select().from(usageTable).where(eq(usageTable.businessId, business.id));
+    const usage = await getCurrentUsageRow(db, business.id);
 
     const delivered = await sendWeeklyReportEmail({
       to: owner.email,
