@@ -46,7 +46,12 @@ RUN pnpm install --frozen-lockfile --prod
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /repo
 ENV NODE_ENV=production
-COPY --from=build /repo /repo
+# Run as the image's unprivileged `node` user, not root: a compromised
+# process must not be able to rewrite the bundle, install packages, or
+# touch anything else on the container filesystem. The app only needs to
+# read /repo (bundle + static SPA) and listen on unprivileged port 5000.
+COPY --from=build --chown=node:node /repo /repo
+USER node
 
 ENV STATIC_DIR=/repo/artifacts/leadsprint/dist/public
 ENV PORT=5000

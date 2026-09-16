@@ -15,8 +15,13 @@ import {
   bookAppointmentForLead,
   getAvailabilityForBusiness,
 } from "../lib/appointments";
+import { createAgentLimiter } from "../middlewares/rateLimit";
 
 const router: IRouter = Router();
+
+// Same threat class as the webhooks: reachable without an operator
+// session (Retell-signed instead), so shed floods before doing DB work.
+router.use(createAgentLimiter());
 
 function rawBody(req: Request): Buffer {
   return (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));

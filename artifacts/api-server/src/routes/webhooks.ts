@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   activitiesTable,
   appointmentsTable,
@@ -10,7 +10,6 @@ import {
   db as defaultDb,
   leadsTable,
   providerEventsTable,
-  usageTable,
 } from "@workspace/db";
 import {
   extractRetellCall,
@@ -31,8 +30,14 @@ import {
   enqueueCallForLead,
   intakeIdempotencyKey,
 } from "../lib/callQueue";
+import { recordVoiceUsage } from "../lib/usage";
+import { createWebhookLimiter } from "../middlewares/rateLimit";
 
 const router: IRouter = Router();
+
+// Provider callbacks arrive without an operator session, so the limiter
+// runs before any signature check — a flood must be shed cheaply.
+router.use(createWebhookLimiter());
 
 // Overridable database handle — see lib/callQueue.ts for why the
 // acceptance tests run against a real embedded PostgreSQL rather than a mock.
@@ -274,10 +279,9 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
 
     if (duration != null) {
-      await db.update(usageTable).set({
-        voiceMinutes: sql`${usageTable.voiceMinutes} + ${duration / 60}`,
-        estimatedCost: sql`${usageTable.estimatedCost} + ${(duration / 60) * 0.12}`,
-      }).where(eq(usageTable.businessId, businessId));
+      // Attributed to the current month's usage row (created on demand),
+      // never spread across periods by a bare business-wide update.
+      await recordVoiceUsage(db, businessId, duration / 60, 0.12);
     }
 
     if (transferFailed && callRow) {
