@@ -33,6 +33,10 @@ export function providerConfig() {
     fromNumberUS: env("RETELL_FROM_NUMBER_US"),
     fromNumberIN: env("RETELL_FROM_NUMBER_IN"),
     webhookSecret: env("RETELL_WEBHOOK_SECRET"),
+    // Overridable so the end-to-end smoke test can point at a local
+    // stub instead of placing a real phone call. Defaults to the real
+    // API; never set this in production.
+    apiUrl: env("RETELL_API_URL") ?? "https://api.retellai.com",
   };
   const twilio = {
     accountSid: env("TWILIO_ACCOUNT_SID"),
@@ -105,7 +109,7 @@ export async function startRetellCall(input: {
     agentId: config.agentId,
     fromNumber,
   });
-  const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
+  const response = await fetch(`${config.apiUrl}/v2/create-phone-call`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${values.apiKey}`,

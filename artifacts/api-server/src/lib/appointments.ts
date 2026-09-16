@@ -4,7 +4,7 @@ import {
   appointmentsTable,
   businessesTable,
   contactsTable,
-  db,
+  db as defaultDb,
   leadsTable,
   usageTable,
 } from "@workspace/db";
@@ -19,9 +19,34 @@ function id(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Overridable database handle — see lib/callQueue.ts for why the
+// acceptance tests run against a real embedded PostgreSQL rather than a
+// mock.
+let db: typeof defaultDb = defaultDb;
+
+export function __setAppointmentsDb(next: typeof defaultDb): void {
+  db = next;
+}
+
+export function __resetAppointmentsDb(): void {
+  db = defaultDb;
+}
+
 export function hasCalConfig(): boolean {
   const config = providerConfig().calcom;
   return Boolean(config.apiKey && config.eventTypeId);
+}
+
+/**
+ * Simulated slots/bookings are allowed only in an explicitly flagged
+ * non-production demo. Everywhere else, "no calendar" means "cannot
+ * book", not "make something up".
+ */
+export function simulatedAvailabilityAllowed(): boolean {
+  return (
+    process.env["LEADSPRINT_DEMO_SEED"]?.trim().toLowerCase() === "true" &&
+    process.env["NODE_ENV"] !== "production"
+  );
 }
 
 export function normalizedCalSlots(
@@ -80,6 +105,17 @@ export async function getAvailabilityForBusiness(businessId: string, date: strin
       throw new AvailabilityError(message, error instanceof ProviderRequestError ? 502 : 503);
     }
   }
+  // No calendar configured. Simulated availability is a demo affordance,
+  // never a live-pilot one: offering a caller a slot that does not exist
+  // on the real calendar is worse than admitting we cannot book. The
+  // onboarding checklist treats Cal.com as required, so this branch is
+  // unreachable in a configured pilot workspace.
+  if (!simulatedAvailabilityAllowed()) {
+    throw new AvailabilityError(
+      "Cal.com is not configured for this workspace, so no real availability can be offered.",
+      503,
+    );
+  }
   const base = new Date(`${date}T13:00:00Z`);
   return [0, 1, 2, 3].map((offset) => {
     const start = new Date(base.getTime() + offset * 60 * 60 * 1000);
@@ -119,6 +155,17 @@ export async function bookAppointmentForLead(input: {
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
   const appointmentId = id("appointment");
   let externalId = `cal_${appointmentId}`;
+
+  if (!hasCalConfig() && !simulatedAvailabilityAllowed()) {
+    // Never write an appointment row the real calendar knows nothing
+    // about. An unbookable workspace must fail loudly so the agent falls
+    // back to a transfer or a message instead of fabricating a
+    // confirmation for the caller.
+    throw new BookingError(
+      "Cal.com is not configured for this workspace, so a booking cannot be confirmed.",
+      503,
+    );
+  }
 
   if (hasCalConfig()) {
     try {

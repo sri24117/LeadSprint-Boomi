@@ -283,6 +283,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Call"
+  /calls/{id}/retry:
+    post:
+      operationId: retryCall
+      tags: [calls]
+      summary: Retry an uncertain, failed or policy-blocked call
+      description: >-
+        Recovery action for a call whose provider state is uncertain. Queues a
+        fresh attempt for the same lead; the safety policy gate runs again, so a
+        retry can still be blocked.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "201":
+          description: Retry started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "409":
+          description: Retry was queued but not started (policy or setup)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /appointments/availability:
     post:
       operationId: getAvailability
@@ -335,6 +361,18 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Appointment"
+  /onboarding/checklist:
+    get:
+      operationId: getOnboardingChecklist
+      tags: [settings]
+      summary: Pilot setup checklist and live-calling readiness
+      responses:
+        "200":
+          description: Checklist state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingChecklist"
   /business-settings:
     get:
       operationId: getBusinessSettings
@@ -529,7 +567,36 @@ components:
         suppressed: { type: boolean }
         last_call: { type: ["string", "null"] }
         created_at: { type: string }
-      required: [id, name, phone, email, preferred_language, source, campaign, project, property_type, budget_label, location, timeline, qualification_status, intent_score, score, next_action, status, suppressed, last_call, created_at]
+        consent_status: { $ref: "#/components/schemas/ConsentStatus" }
+        consent_source: { type: ["string", "null"] }
+        consent_at: { type: ["string", "null"] }
+        consent_detail: { type: string }
+        callable: { type: boolean }
+      required: [id, name, phone, email, preferred_language, source, campaign, project, property_type, budget_label, location, timeline, qualification_status, intent_score, score, next_action, status, suppressed, last_call, created_at, consent_status, consent_source, consent_at, consent_detail, callable]
+    ConsentStatus:
+      type: string
+      enum: [unknown, valid, revoked]
+    ChecklistItem:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        complete: { type: boolean }
+        severity: { type: string, enum: [required, recommended] }
+        detail: { type: string }
+      required: [key, label, complete, severity, detail]
+    OnboardingChecklist:
+      type: object
+      properties:
+        ready_for_live_calls: { type: boolean }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChecklistItem"
+        missing_required:
+          type: array
+          items: { type: string }
+      required: [ready_for_live_calls, items, missing_required]
     LeadUpdate:
       type: object
       properties:
@@ -547,6 +614,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/LeadImportRow"
+        consent_status: { $ref: "#/components/schemas/ConsentStatus" }
+        consent_source:
+          type: string
+          description: Where and how consent was captured for this batch. Required when consent_status is "valid".
+        consent_at: { type: string, format: date-time }
       required: [rows]
     LeadImportRow:
       type: object

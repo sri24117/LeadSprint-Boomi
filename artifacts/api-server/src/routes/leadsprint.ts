@@ -58,6 +58,16 @@ import {
 import { evaluateCallPolicy } from "../lib/policy";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 import {
+  ConsentEvidenceError,
+  describeConsent,
+  normalizeConsentEvidence,
+} from "../lib/consent";
+import {
+  buildOnboardingChecklist,
+  liveCallingBlockedReason,
+} from "../lib/onboarding";
+import { dispatchQueuedCall, enqueueCallForLead } from "../lib/callQueue";
+import {
   AvailabilityError,
   BookingError,
   bookAppointmentForLead,
@@ -75,6 +85,20 @@ const USER_ID = "user_demo";
 export const DEMO_BUSINESS_ID = BUSINESS_ID;
 export const DEMO_USER_ID = USER_ID;
 
+/**
+ * Demo seeding is now opt-in. Previously `ensureSeedData()` ran at import
+ * time against ANY database — including production — writing a fake
+ * "Northstar Realty" workspace with four fake leads and two fake calls.
+ * A pilot customer must never see invented leads in their console, and a
+ * production database must never contain a workspace nobody created.
+ *
+ * Requires an explicit flag AND a non-production NODE_ENV.
+ */
+export function demoSeedEnabled(): boolean {
+  const requested = process.env["LEADSPRINT_DEMO_SEED"]?.trim().toLowerCase() === "true";
+  return requested && process.env["NODE_ENV"] !== "production";
+}
+
 function id(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
 }
@@ -83,8 +107,26 @@ function iso(value: Date | null): string | null {
   return value?.toISOString() ?? null;
 }
 
+/**
+ * A request with no resolved workspace is a bug or an auth failure — it is
+ * never "the demo business". The old silent fallback to `business_demo`
+ * meant a misconfigured production deployment served (and mutated) the
+ * seeded demo workspace's leads, calls and appointments. Fail closed.
+ */
+export class WorkspaceScopeError extends Error {
+  readonly statusCode = 401;
+  constructor() {
+    super(
+      "No workspace is associated with this request. Sign in again; LeadSprint no longer falls back to the demo workspace.",
+    );
+  }
+}
+
 function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
-  return req.leadSprintBusinessId ?? BUSINESS_ID;
+  const businessId = req.leadSprintBusinessId;
+  if (businessId) return businessId;
+  if (demoSeedEnabled()) return BUSINESS_ID;
+  throw new WorkspaceScopeError();
 }
 
 async function ensureSeedData(): Promise<void> {
@@ -124,6 +166,12 @@ async function ensureSeedData(): Promise<void> {
       email: item.email,
       preferredLanguage: item.preferredLanguage,
       timezone: timezoneForUSPhoneNumber(item.phone),
+      // Seeded demo contacts carry explicit (fictional) consent evidence so
+      // the demo exercises the same gate a real pilot does, rather than
+      // relying on a permissive default.
+      consentStatus: "valid",
+      consentSource: `demo_seed:${item.source.toLowerCase()} enquiry form`,
+      consentAt: new Date(),
     });
     await db.insert(leadsTable).values({
       id: id("lead"),
@@ -207,13 +255,19 @@ async function ensureSeedData(): Promise<void> {
 }
 
 // Fire-and-forget at boot so the demo workspace exists before the first
-// request. A rejected promise here (database not reachable yet) must not
-// become an unhandled rejection that takes the whole process down — the
-// health endpoints and webhooks are supposed to stay up, and the seed is
-// retried by the first /auth/me request anyway.
-void ensureSeedData().catch((err) => {
-  logger.error({ err }, "Demo seed data could not be created");
-});
+// request — but ONLY when demo seeding was explicitly requested on a
+// non-production deployment (see demoSeedEnabled). A rejected promise
+// here (database not reachable yet) must not become an unhandled
+// rejection that takes the whole process down — the health endpoints and
+// webhooks are supposed to stay up.
+if (demoSeedEnabled()) {
+  logger.warn(
+    "LEADSPRINT_DEMO_SEED is enabled: writing the seeded demo workspace (fake leads, calls and appointments) into this database. Never enable this on a customer deployment.",
+  );
+  void ensureSeedData().catch((err) => {
+    logger.error({ err }, "Demo seed data could not be created");
+  });
+}
 
 async function getBusiness(businessId = BUSINESS_ID) {
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
@@ -232,6 +286,18 @@ async function getLeadDto(leadId: string, businessId = BUSINESS_ID) {
     location: row.lead.location, timeline: row.lead.timeline, qualification_status: row.lead.qualificationStatus,
     intent_score: row.lead.intentScore, score: row.lead.score, next_action: row.lead.nextAction, status: row.lead.status,
     suppressed: Boolean(row.contact.suppressedAt), last_call: iso(lastCall?.endedAt ?? lastCall?.startedAt ?? null), created_at: row.lead.createdAt.toISOString(),
+    // Consent state is operator-visible on every lead: a lead that cannot
+    // lawfully be called must look different in the console, not just fail
+    // silently at call time.
+    consent_status: row.contact.consentStatus,
+    consent_source: row.contact.consentSource ?? null,
+    consent_at: iso(row.contact.consentAt ?? null),
+    consent_detail: describeConsent({
+      consentStatus: row.contact.consentStatus,
+      consentSource: row.contact.consentSource,
+      consentAt: row.contact.consentAt,
+    }),
+    callable: row.contact.consentStatus === "valid" && !row.contact.suppressedAt,
   };
 }
 
@@ -255,7 +321,7 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
 }
 
 router.get("/auth/me", async (_req, res): Promise<void> => {
-  await ensureSeedData();
+  if (demoSeedEnabled()) await ensureSeedData();
   const req = _req;
   const businessId = scopedBusinessId(req);
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
@@ -326,6 +392,23 @@ router.post("/leads/import", async (req, res): Promise<void> => {
   const BUSINESS_ID = scopedBusinessId(req);
   const body = ImportLeadsBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
+
+  // Launch gate: an import must say where consent for this batch came
+  // from. Without it every imported contact lands as "unknown" and is
+  // never callable — which is safe, but silently useless. Make the
+  // operator state it up front instead.
+  let batchConsent;
+  try {
+    batchConsent = normalizeConsentEvidence({
+      status: body.data.consent_status ?? "unknown",
+      source: body.data.consent_source,
+      at: body.data.consent_at,
+    });
+  } catch (error) {
+    if (error instanceof ConsentEvidenceError) { res.status(error.statusCode).json({ error: error.message }); return; }
+    throw error;
+  }
+
   let imported = 0;
   let skipped = 0;
   for (const row of body.data.rows) {
@@ -333,11 +416,11 @@ router.post("/leads/import", async (req, res): Promise<void> => {
     if (existing[0]) { skipped += 1; continue; }
     const contactId = id("contact");
     const leadId = id("lead");
-    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null, timezone: timezoneForUSPhoneNumber(row.phone) });
+    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null, timezone: timezoneForUSPhoneNumber(row.phone), consentStatus: batchConsent.consentStatus, consentSource: batchConsent.consentSource, consentAt: batchConsent.consentAt });
     await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
     imported += 1;
   }
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "import", title: `${imported} leads imported`, detail: "CSV import completed with duplicate checks" });
+  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "import", title: `${imported} leads imported`, detail: `CSV import completed with duplicate checks · consent: ${describeConsent(batchConsent)}` });
   const leads = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID)).orderBy(desc(leadsTable.createdAt));
   const result = await Promise.all(leads.slice(0, imported).map((lead) => getLeadDto(lead.id, BUSINESS_ID)));
   res.json(ImportLeadsResponse.parse({ imported, skipped, leads: result.filter(Boolean) }));
@@ -366,56 +449,75 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
   const lead = await getLeadDto(body.data.lead_id, BUSINESS_ID);
   if (!lead) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  // Already talking to this person — don't start a second call.
   const [existing] = await db.select().from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), eq(callsTable.status, "in_progress"))).limit(1);
   if (existing) { res.json(StartCallResponse.parse(await getCallDto(existing))); return; }
 
   const business = await getBusiness(BUSINESS_ID);
-  const [leadRow] = await db.select({ contactId: leadsTable.contactId }).from(leadsTable).where(and(eq(leadsTable.id, body.data.lead_id), eq(leadsTable.businessId, BUSINESS_ID)));
-  const contactId = leadRow?.contactId ?? "";
-  const [contact] = contactId ? await db.select().from(contactsTable).where(eq(contactsTable.id, contactId)) : [];
-  const priorAttempts = (await db.select({ id: callsTable.id }).from(callsTable).where(and(eq(callsTable.leadId, body.data.lead_id), eq(callsTable.businessId, BUSINESS_ID), sql`${callsTable.status} != 'policy_blocked'`))).length;
 
-  const callId = id("call");
-
-  // Non-negotiable safety gate: consent -> not suppressed -> quiet hours -> attempt limit -> kill switch.
-  const decision = evaluateCallPolicy({
-    business: { timezone: business?.timezone ?? "UTC", quietHours: business?.quietHours, maxCallAttempts: business?.maxCallAttempts ?? 2 },
-    contact: { consentStatus: contact?.consentStatus ?? "valid", suppressedAt: contact?.suppressedAt ?? null, timezone: contact?.timezone },
-    attemptsSoFar: priorAttempts,
-  });
-
-  if (!decision.allowed) {
-    const [blocked] = await db.insert(callsTable).values({
-      id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell",
-      idempotencyKey: `manual_${callId}`, status: "policy_blocked",
-      outcome: `Blocked — ${decision.reason}`, summary: decision.message ?? "Blocked by call policy.", errorState: decision.reason,
-    }).returning();
-    await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "policy", title: `Call blocked for ${lead.name}`, detail: decision.message ?? "Blocked by call policy." });
-    res.status(409).json(StartCallResponse.parse(await getCallDto(blocked)));
+  // Setup gate: refuse to place live calls from a half-configured
+  // workspace, before any row is written, so an unfinished onboarding is
+  // an obvious error in the console rather than a mystery failure on a
+  // real prospect's phone.
+  const setupBlocked = liveCallingBlockedReason(business);
+  if (setupBlocked) {
+    res.status(409).json({ error: setupBlocked, code: "SETUP_INCOMPLETE" });
     return;
   }
 
-  const [created] = await db.insert(callsTable).values({ id: callId, businessId: BUSINESS_ID, contactId, leadId: body.data.lead_id, provider: "Retell", idempotencyKey: `manual_${callId}`, status: "queued", outcome: "Queued for provider", summary: "Call queued for the approved qualification script." }).returning();
-  let current = created;
-  const liveRetell = hasRetellConfigForMarket(business?.market === "IN" ? "IN" : "US");
-  if (liveRetell) {
-    try {
-      const live = await startRetellCall({
-        toNumber: lead.phone,
-        market: business?.market === "IN" ? "IN" : "US",
-        metadata: { business_id: BUSINESS_ID, lead_id: body.data.lead_id, call_id: callId },
-      });
-      [current] = await db.update(callsTable).set({ providerCallId: live.callId, status: "in_progress", startedAt: new Date(), outcome: "Live call started with Retell", summary: "Retell accepted the call and will report the final outcome by webhook." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Retell request failed";
-      [current] = await db.update(callsTable).set({ status: "uncertain", errorState: message, outcome: "Provider state uncertain", summary: "The call request could not be confirmed. Reconcile from the provider callback before retrying." }).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID))).returning();
-      req.log.error({ callId, err: message }, "Retell call start failed");
-    }
-  } else {
-    await db.insert(workflowJobsTable).values({ id: id("job"), businessId: BUSINESS_ID, type: "initiate_call", idempotencyKey: callId });
+  // One shared implementation with the intake path and the cron worker
+  // (lib/callQueue.ts): enqueue idempotently, then dispatch — with the
+  // safety policy gate re-evaluated immediately before the provider
+  // request.
+  const queued = await enqueueCallForLead({
+    businessId: BUSINESS_ID,
+    leadId: body.data.lead_id,
+    idempotencyKey: `console_${id("attempt")}`,
+    source: "console",
+  });
+  if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
+
+  const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
+  const current = dispatch.call ?? queued.call;
+
+  if (dispatch.outcome === "policy_blocked") {
+    res.status(409).json(StartCallResponse.parse(await getCallDto(current)));
+    return;
   }
-  await db.insert(activitiesTable).values({ id: id("activity"), businessId: BUSINESS_ID, type: "call", title: `Call ${liveRetell ? "started" : "queued"} for ${lead.name}`, detail: liveRetell ? "Retell accepted the call · awaiting signed callback" : "Demo mode · Retell credentials are not configured", });
+  if (dispatch.outcome === "setup_incomplete") {
+    res.status(409).json({ error: dispatch.message, code: "SETUP_INCOMPLETE" });
+    return;
+  }
   res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
+});
+
+/**
+ * POST /calls/:id/retry — operator recovery for a call whose provider
+ * state is uncertain or which failed. Re-queues the SAME call row under a
+ * fresh attempt rather than leaving the operator with a dead end. The
+ * policy gate runs again on dispatch, so a retry can still be blocked.
+ */
+router.post("/calls/:id/retry", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
+  const callId = typeof req.params.id === "string" ? req.params.id : "";
+  const [row] = await db.select().from(callsTable).where(and(eq(callsTable.id, callId), eq(callsTable.businessId, BUSINESS_ID)));
+  if (!row) { res.status(404).json({ error: "Call not found" }); return; }
+  if (!["uncertain", "failed", "policy_blocked"].includes(row.status)) {
+    res.status(409).json({ error: `Only uncertain, failed or policy-blocked calls can be retried; this one is ${row.status}.` });
+    return;
+  }
+
+  const queued = await enqueueCallForLead({
+    businessId: BUSINESS_ID,
+    leadId: row.leadId,
+    idempotencyKey: `retry_${row.id}_${id("attempt")}`,
+    source: "console",
+  });
+  if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
+  const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
+  const current = dispatch.call ?? queued.call;
+  res.status(dispatch.outcome === "started" ? 201 : 409).json(StartCallResponse.parse(await getCallDto(current)));
 });
 
 router.get("/appointments", async (_req, res): Promise<void> => {
@@ -463,6 +565,17 @@ router.post("/appointments/book", async (req, res): Promise<void> => {
     }
     throw error;
   }
+});
+
+/**
+ * Pilot setup checklist. The console shows this on the Today screen and a
+ * dedicated setup panel; `ready_for_live_calls: false` means POST
+ * /calls/start and the automatic intake path both refuse to dial.
+ */
+router.get("/onboarding/checklist", async (req, res): Promise<void> => {
+  const BUSINESS_ID = scopedBusinessId(req);
+  const business = await getBusiness(BUSINESS_ID);
+  res.json(buildOnboardingChecklist(business));
 });
 
 router.get("/business-settings", async (_req, res): Promise<void> => {

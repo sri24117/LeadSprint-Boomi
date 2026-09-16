@@ -41,7 +41,12 @@ function id(prefix: string): string {
  * derived only from the signed call's own metadata, never from
  * LLM-supplied arguments — see lib/agentAuth.ts for why.
  */
-router.use((req, res, next) => {
+// Scoped to /agent/* ONLY. Mounted bare (`router.use(fn)`), this
+// middleware ran for EVERY request that reached the agent router —
+// including all the operator-console routes mounted after it — so the
+// whole console API answered "Invalid Retell signature". The path prefix
+// is what keeps Retell's auth on Retell's endpoints.
+router.use("/agent", (req, res, next) => {
   try {
     (req as Request & { agentTool?: ReturnType<typeof parseAgentToolRequest> }).agentTool = parseAgentToolRequest(req, rawBody(req));
     next();

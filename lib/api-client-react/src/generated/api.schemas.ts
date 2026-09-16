@@ -128,6 +128,15 @@ export const LeadStatus = {
   suppressed: 'suppressed',
 } as const;
 
+export type ConsentStatus = typeof ConsentStatus[keyof typeof ConsentStatus];
+
+
+export const ConsentStatus = {
+  unknown: 'unknown',
+  valid: 'valid',
+  revoked: 'revoked',
+} as const;
+
 export interface Lead {
   id: string;
   name: string;
@@ -159,6 +168,35 @@ export interface Lead {
   /** @nullable */
   last_call: string | null;
   created_at: string;
+  consent_status: ConsentStatus;
+  /** @nullable */
+  consent_source: string | null;
+  /** @nullable */
+  consent_at: string | null;
+  consent_detail: string;
+  callable: boolean;
+}
+
+export type ChecklistItemSeverity = typeof ChecklistItemSeverity[keyof typeof ChecklistItemSeverity];
+
+
+export const ChecklistItemSeverity = {
+  required: 'required',
+  recommended: 'recommended',
+} as const;
+
+export interface ChecklistItem {
+  key: string;
+  label: string;
+  complete: boolean;
+  severity: ChecklistItemSeverity;
+  detail: string;
+}
+
+export interface OnboardingChecklist {
+  ready_for_live_calls: boolean;
+  items: ChecklistItem[];
+  missing_required: string[];
 }
 
 export type LeadUpdateStatus = typeof LeadUpdateStatus[keyof typeof LeadUpdateStatus];
@@ -199,6 +237,10 @@ export interface LeadImportRow {
 
 export interface LeadImportInput {
   rows: LeadImportRow[];
+  consent_status?: ConsentStatus;
+  /** Where and how consent was captured for this batch. Required when consent_status is "valid". */
+  consent_source?: string;
+  consent_at?: string;
 }
 
 export interface ImportResult {

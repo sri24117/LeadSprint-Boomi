@@ -5,6 +5,7 @@
  * LeadSprint operator console API
  * OpenAPI spec version: 0.1.0
  */
+import type { ConsentStatus } from './consentStatus';
 import type { LeadStatus } from './leadStatus';
 import type { Score } from './score';
 
@@ -39,4 +40,11 @@ export interface Lead {
   /** @nullable */
   last_call: string | null;
   created_at: string;
+  consent_status: ConsentStatus;
+  /** @nullable */
+  consent_source: string | null;
+  /** @nullable */
+  consent_at: string | null;
+  consent_detail: string;
+  callable: boolean;
 }
