@@ -52,6 +52,12 @@ export const contactsTable = pgTable("contacts", {
   preferredLanguage: text("preferred_language").notNull().default("en"),
   consentStatus: text("consent_status").notNull().default("valid"),
   suppressedAt: timestamp("suppressed_at", { withTimezone: true }),
+  // Called-party IANA timezone, derived from the phone number's area code
+  // at intake (see lib/areaCodeTimezones.ts). NULL means "we couldn't
+  // determine it" — the policy gate blocks rather than guessing, since
+  // quiet-hours law is defined by the recipient's local time, not the
+  // business's.
+  timezone: text("timezone"),
 });
 
 export const leadsTable = pgTable("leads", {

@@ -8,6 +8,7 @@ import leadsprintRouter, {
 } from "./leadsprint";
 import webhooksRouter from "./webhooks";
 import cronRouter from "./cron";
+import agentRouter from "./agent";
 import { requireAuth } from "../middlewares/auth";
 import { getClerkProxyHost } from "../middlewares/clerkProxyMiddleware";
 import { logger } from "../lib/logger";
@@ -16,11 +17,14 @@ const router: IRouter = Router();
 
 // Public / non-operator-session routes first: health checks, provider
 // webhooks (authenticated by their own HMAC/Clerk-independent signatures),
-// and scheduler cron endpoints (authenticated by CRON_SECRET). None of
-// these should ever depend on Clerk being configured.
+// scheduler cron endpoints (authenticated by CRON_SECRET), and the Retell
+// agent tool endpoints (authenticated by X-Retell-Signature — Retell has
+// no Clerk session; see lib/agentAuth.ts). None of these should ever
+// depend on Clerk being configured.
 router.use(healthRouter);
 router.use(webhooksRouter);
 router.use(cronRouter);
+router.use(agentRouter);
 
 // Everything below this line is the authenticated operator console API.
 
