@@ -110,11 +110,26 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
   let alreadyHandled = 0;
 
   for (const job of jobs) {
-    // The job's idempotency key IS the call id it was created for (see
-    // lib/callQueue.ts). One shared dispatcher runs the setup gate, the
-    // full safety policy gate, and the provider request — a job being old
-    // never bypasses any of them.
-    const result = await dispatchQueuedCall({ businessId: job.businessId, callId: job.idempotencyKey });
+    // The job's idempotency key IS the stable key shared with the call it was
+    // created for (see lib/callQueue.ts). Look up the call by that key, then
+    // dispatch. One shared dispatcher runs the setup gate, the full safety
+    // policy gate, and the provider request — a job being old never bypasses
+    // any of them.
+    const [call] = await db
+      .select()
+      .from(callsTable)
+      .where(and(eq(callsTable.businessId, job.businessId), eq(callsTable.idempotencyKey, job.idempotencyKey)))
+      .limit(1);
+    if (!call) {
+      // No call row found for this idempotency key — mark job failed and continue.
+      await db
+        .update(workflowJobsTable)
+        .set({ status: "failed", attempts: job.attempts + 1, lastError: "Call row not found for idempotency key" })
+        .where(eq(workflowJobsTable.id, job.id));
+      failed += 1;
+      continue;
+    }
+    const result = await dispatchQueuedCall({ businessId: job.businessId, callId: call.id });
     const nextAttempts = job.attempts + 1;
 
     switch (result.outcome) {

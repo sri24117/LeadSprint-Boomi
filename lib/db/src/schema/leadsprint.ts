@@ -134,7 +134,7 @@ export const appointmentsTable = pgTable("appointments", {
   status: text("status").notNull().default("confirmed"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  calendarExternalUnique: uniqueIndex("appointments_calendar_external_unique").on(table.calendarProvider, table.externalId),
+  calendarExternalUnique: uniqueIndex("appointments_calendar_external_unique").on(table.businessId, table.calendarProvider, table.externalId),
 }));
 
 export const activitiesTable = pgTable("activities", {
@@ -190,7 +190,7 @@ export const providerEventsTable = pgTable("provider_events", {
   payload: jsonb("payload").notNull().default({}),
   processedAt: timestamp("processed_at", { withTimezone: true }),
 }, (table) => ({
-  providerEventUnique: uniqueIndex("provider_events_provider_external_unique").on(table.provider, table.externalEventId),
+  providerEventUnique: uniqueIndex("provider_events_provider_external_unique").on(table.businessId, table.provider, table.externalEventId),
 }));
 
 export const insertBusinessSchema = createInsertSchema(businessesTable);

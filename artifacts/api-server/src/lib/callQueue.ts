@@ -134,7 +134,7 @@ export async function enqueueCallForLead(input: {
       id: id("job"),
       businessId,
       type: "initiate_call",
-      idempotencyKey: created.id,
+      idempotencyKey,
     })
     .onConflictDoNothing({
       target: [workflowJobsTable.businessId, workflowJobsTable.idempotencyKey],
@@ -272,7 +272,7 @@ export async function dispatchQueuedCall(input: {
         status: "policy_blocked",
         outcome: `Blocked — ${decision.reason}`,
         summary: decision.message ?? "Blocked by call policy.",
-        errorState: decision.reason,
+        errorState: decision.reason ?? "policy_blocked",
       })
       .where(and(eq(callsTable.id, call.id), eq(callsTable.businessId, businessId)))
       .returning();

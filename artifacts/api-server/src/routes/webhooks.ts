@@ -89,6 +89,7 @@ async function acceptProviderEvent(input: {
     })
     .onConflictDoNothing({
       target: [
+        providerEventsTable.businessId,
         providerEventsTable.provider,
         providerEventsTable.externalEventId,
       ],

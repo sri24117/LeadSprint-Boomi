@@ -488,7 +488,7 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   const queued = await enqueueCallForLead({
     businessId: BUSINESS_ID,
     leadId: body.data.lead_id,
-    idempotencyKey: `console_${id("attempt")}`,
+    idempotencyKey: `console_${body.data.lead_id}`,
     source: "console",
   });
   if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
@@ -526,7 +526,7 @@ router.post("/calls/:id/retry", async (req, res): Promise<void> => {
   const queued = await enqueueCallForLead({
     businessId: BUSINESS_ID,
     leadId: row.leadId,
-    idempotencyKey: `retry_${row.id}_${id("attempt")}`,
+    idempotencyKey: `retry_${row.id}`,
     source: "console",
   });
   if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }

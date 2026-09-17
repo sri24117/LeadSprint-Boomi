@@ -69,24 +69,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
-  /auth/login:
-    post:
-      operationId: login
-      tags: [auth]
-      summary: Start an operator session
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginInput"
-      responses:
-        "200":
-          description: Signed-in operator
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthSession"
   /auth/logout:
     post:
       operationId: logout
@@ -504,12 +486,6 @@ components:
         error:
           type: string
       required: [error]
-    LoginInput:
-      type: object
-      properties:
-        email:
-          type: string
-      required: [email]
     User:
       type: object
       properties:
@@ -652,7 +628,7 @@ components:
         lead_name: { type: string }
         phone: { type: string }
         provider: { type: string }
-        status: { type: string, enum: [created, policy_blocked, queued, provider_requesting, provider_accepted, in_progress, completed, failed, uncertain] }
+        status: { type: string, enum: [queued, in_progress, completed, failed, uncertain, policy_blocked] }
         started_at: { type: ["string", "null"] }
         ended_at: { type: ["string", "null"] }
         duration_seconds: { type: ["number", "null"] }

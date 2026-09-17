@@ -163,7 +163,7 @@ CREATE TABLE provider_events (
   payload jsonb NOT NULL DEFAULT '{}',
   processed_at timestamptz
 );
-CREATE UNIQUE INDEX provider_events_provider_external_unique ON provider_events (provider, external_event_id);
+CREATE UNIQUE INDEX provider_events_provider_external_unique ON provider_events (business_id, provider, external_event_id);
 `;
 
 export async function createTestDb(): Promise<TestDb> {

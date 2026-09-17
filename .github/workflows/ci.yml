@@ -43,3 +43,40 @@ jobs:
         env:
           PORT: "5000"
           BASE_PATH: "/"
+
+  contract-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Orval codegen drift
+        run: |
+          pnpm --filter @workspace/api-client-react run generate
+          if ! git diff --exit-code; then
+            echo "::error::Orval-generated client code has drifted from openapi.yaml. Run 'pnpm --filter @workspace/api-client-react run generate' and commit the changes."
+            exit 1
+          fi
+
+      - name: Check schema/test-DDL sync
+        run: |
+          # Verify test DDL matches production schema by comparing key indexes
+          if ! grep -q "CREATE UNIQUE INDEX appointments_calendar_external_unique ON appointments (business_id, calendar_provider, external_id)" artifacts/api-server/src/test/testDb.ts; then
+            echo "::error::Test DDL appointments_calendar_external_unique index missing business_id scope. Update testDb.ts to match lib/db/src/schema/leadsprint.ts"
+            exit 1
+          fi
+          if ! grep -q "CREATE UNIQUE INDEX provider_events_provider_external_unique ON provider_events (business_id, provider, external_event_id)" artifacts/api-server/src/test/testDb.ts; then
+            echo "::error::Test DDL provider_events_provider_external_unique index missing business_id scope. Update testDb.ts to match lib/db/src/schema/leadsprint.ts"
+            exit 1
+          fi

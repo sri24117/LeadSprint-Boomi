@@ -91,10 +91,11 @@ export async function requireAuth(
         .onConflictDoNothing()
         .returning();
       const now = new Date();
+      const usageRowId = `usage_${businessId}_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
       await db
         .insert(usageTable)
         .values({
-          id: `usage_${businessId}`,
+          id: usageRowId,
           businessId,
           periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
           periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
