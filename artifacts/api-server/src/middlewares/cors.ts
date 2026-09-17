@@ -19,6 +19,12 @@ import type { RequestHandler } from "express";
  * - CORS_ORIGINS unset + non-production: loopback origins only
  *   (http/https on localhost, 127.0.0.1 or [::1], any port), so the local
  *   Vite dev server keeps working without opening anything to the LAN.
+ * - Any mode: a request whose Origin matches this deployment's own origin
+ *   is a same-origin call, not a CORS call, and always passes (with no
+ *   CORS headers — browsers never read them there). Without this the
+ *   single-container production shape above 403'd every mutating call
+ *   from its own console: browsers attach Origin to every request whose
+ *   method is not GET/HEAD, same-origin included. See isSameOriginRequest.
  *
  * A denied origin gets an immediate 403 JSON answer — a policy denial,
  * not a server fault, and deliberately not routed any further. (Letting
@@ -88,9 +94,12 @@ export function resolveCorsPolicy(env: NodeJS.ProcessEnv = process.env): CorsPol
 }
 
 /**
- * The single allow/deny decision. An absent Origin header is not a CORS
- * request at all (curl, server-to-server, same-origin navigation) and is
- * always allowed through — CORS only governs what browsers send.
+ * The single allow/deny decision for *cross-origin* requests. An absent
+ * Origin header is not a CORS request at all (curl, server-to-server,
+ * same-origin navigation) and is always allowed through — CORS only governs
+ * what browsers send. A present Origin that matches this deployment's own
+ * origin is not a policy question either; the middleware settles that with
+ * isSameOriginRequest before consulting this.
  */
 export function isOriginAllowed(policy: CorsPolicy, origin: string | undefined): boolean {
   if (!origin) return true;
@@ -104,13 +113,66 @@ export function isOriginAllowed(policy: CorsPolicy, origin: string | undefined):
   }
 }
 
+/**
+ * The part of an Express request this file reasons about. Kept structural
+ * (rather than `Request`) so the same-origin decision is unit-testable
+ * without booting a server.
+ */
+export interface RequestOriginView {
+  /** Express's trust-proxy-aware scheme: "http" | "https". */
+  protocol: string;
+  /** Express's trust-proxy-aware authority, including a non-default port. */
+  host: string;
+}
+
+/** Normalise an origin the way URL does: lowercase host, drop default ports. */
+function normalizeOrigin(value: string): string | undefined {
+  try {
+    return new URL(value).origin;
+  } catch {
+    // "null" (sandboxed iframe, file://) and anything else unparseable.
+    return undefined;
+  }
+}
+
+/** This deployment's own origin, as a browser served from it would state it. */
+export function ownOriginOf(req: RequestOriginView): string | undefined {
+  if (!req.host) return undefined;
+  return normalizeOrigin(`${req.protocol}://${req.host}`);
+}
+
+/**
+ * Is this request from the deployment's own origin?
+ *
+ * `req.protocol` and `req.host` are Express's trust-proxy-aware getters, so
+ * the comparison is against the *public* origin: behind the TLS-terminating
+ * proxy (TRUST_PROXY=1, the production default) they come from
+ * X-Forwarded-Proto / X-Forwarded-Host, and with TRUST_PROXY=false those
+ * headers are ignored, so a client cannot forge a same-origin match.
+ *
+ * Honouring the forwarded headers cannot open a CORS hole either: a browser
+ * will not put X-Forwarded-* on a cross-site request without a preflight, and
+ * the preflight itself carries no custom headers — it is judged on its Origin
+ * alone and denied by the policy. An opaque `Origin: null` is never
+ * same-origin.
+ */
+export function isSameOriginRequest(
+  req: RequestOriginView,
+  origin: string | undefined,
+): boolean {
+  if (!origin) return false;
+  const requested = normalizeOrigin(origin);
+  if (!requested) return false;
+  return ownOriginOf(req) === requested;
+}
+
 /** Drop-in for the old bare `app.use(cors())`. Reads env at call time. */
 export function createCorsMiddleware(env: NodeJS.ProcessEnv = process.env): RequestHandler {
   const policy = resolveCorsPolicy(env);
   const corsHandler = cors({
     origin: (origin, callback) => {
-      // Unreachable for denied origins (the pre-check below answers 403
-      // first), but fail closed anyway if the two ever disagree.
+      // Unreachable: the middleware only hands cors() requests the policy
+      // already allowed. Fail closed anyway if the two ever disagree.
       if (!isOriginAllowed(policy, origin)) {
         callback(new Error(`Origin ${origin} is not allowed by this deployment's CORS policy`));
         return;
@@ -121,12 +183,20 @@ export function createCorsMiddleware(env: NodeJS.ProcessEnv = process.env): Requ
   });
   return (req, res, next) => {
     const origin = req.get("Origin");
-    if (!isOriginAllowed(policy, origin)) {
-      res.status(403).json({
-        error: `Origin ${origin} is not allowed by this deployment's CORS policy`,
-      });
+    if (isOriginAllowed(policy, origin)) {
+      // Cross-origin and explicitly allowed: emit the Access-Control-* headers.
+      corsHandler(req, res, next);
       return;
     }
-    corsHandler(req, res, next);
+    if (isSameOriginRequest(req, origin)) {
+      // The console calling the API it was served from. Not a CORS request,
+      // so it needs no headers and gets none — this is what keeps the
+      // single-container production deployment working.
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: `Origin ${origin} is not allowed by this deployment's CORS policy`,
+    });
   };
 }
