@@ -19,6 +19,11 @@ import http from "node:http";
 
 const PORT = Number(process.env.STUB_PORT ?? 5510);
 const received = [];
+// Dedicated counter for Retell call creations, so the provider call ids are
+// stable and self-evident (stub_call_1 = first dial, regardless of how many
+// Cal.com requests were interleaved). Scripts that replay a callback
+// (docs/sales-demo.md) can rely on this numbering.
+let retellCalls = 0;
 
 function json(res, status, body) {
   const payload = JSON.stringify(body);
@@ -60,8 +65,9 @@ const server = http.createServer((req, res) => {
 
     // Retell: create a phone call.
     if (url.pathname === "/retell/v2/create-phone-call") {
+      retellCalls += 1;
       return json(res, 201, {
-        call_id: `stub_call_${received.length}`,
+        call_id: `stub_call_${retellCalls}`,
         agent_id: body?.override_agent_id ?? null,
       });
     }

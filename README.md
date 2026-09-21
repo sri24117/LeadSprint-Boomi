@@ -13,6 +13,25 @@ console (`artifacts/leadsprint`) · PostgreSQL via Drizzle ORM (`lib/db`) ·
 Clerk auth · OpenAPI-first contract with codegen (`lib/api-spec`,
 `lib/api-zod`, `lib/api-client-react`).
 
+## Demo (one command)
+
+The fastest way to see the product — no Docker, no cloud accounts, no real
+phone calls:
+
+```bash
+pnpm demo            # fresh-ish boot, reuses the existing demo database
+pnpm demo --reset    # boot with a fresh, re-seeded demo database
+```
+
+Boots embedded PostgreSQL, pushes the schema, starts Retell/Cal.com provider
+stubs, builds everything, and serves the seeded operator console on
+`http://localhost:5000/`. `Ctrl+C` stops all of it. Ports are overridable via
+`DEMO_PORT`, `DEV_PG_PORT`, `STUB_PORT`.
+
+For the scripted 10-minute sales walkthrough (the exact webhook commands,
+talking points, and live-phone-call setup), see
+[`docs/sales-demo.md`](docs/sales-demo.md).
+
 ## Local development
 
 ```bash
@@ -20,12 +39,13 @@ corepack enable
 pnpm install
 pnpm --filter @workspace/db run push        # push schema to DATABASE_URL
 pnpm --filter @workspace/api-server run dev  # API on the port you set
-pnpm --filter @workspace/leadsprint run dev  # frontend Vite dev server
+pnpm --filter @workspace/leadsprint run dev  # frontend Vite dev server (port 5173; proxies /api to 127.0.0.1:5000)
 ```
 
 Requires `DATABASE_URL` at minimum. Everything else (Clerk, Retell, Twilio,
 Cal.com, SMTP) fails closed into demo mode when unset — check
-`GET /api/readyz` to see what's live vs. demo.
+`GET /api/readyz` to see what's live vs. demo. `PORT` and `BASE_PATH` have
+local defaults (`5173`, `/`); CI and the Dockerfile set them explicitly.
 
 ### Running the console without Clerk (local only)
 

@@ -30,7 +30,7 @@ import {
   enqueueCallForLead,
   intakeIdempotencyKey,
 } from "../lib/callQueue";
-import { recordVoiceUsage } from "../lib/usage";
+import { recordVoiceUsage, VOICE_COST_PER_MINUTE } from "../lib/usage";
 import { createWebhookLimiter } from "../middlewares/rateLimit";
 
 const router: IRouter = Router();
@@ -282,7 +282,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     if (duration != null) {
       // Attributed to the current month's usage row (created on demand),
       // never spread across periods by a bare business-wide update.
-      await recordVoiceUsage(db, businessId, duration / 60, 0.12);
+      await recordVoiceUsage(db, businessId, duration / 60, VOICE_COST_PER_MINUTE);
     }
 
     if (transferFailed && callRow) {

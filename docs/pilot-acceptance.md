@@ -255,13 +255,18 @@ Closed in Days 11–12:
   `docs/backup-restore.md`. Coolify scheduled backups to S3 must still
   be configured on the production database before onboarding a pilot.
 
+Closed after the audit-fix pass:
+
+- ~~`/reports/weekly` still labels its window `"This week · pilot report"`
+  while counting all-time rows~~ — the report is now a true trailing-7-days
+  window; the label is computed from the window itself, and voice minutes /
+  cost are derived from in-window call durations at `VOICE_COST_PER_MINUTE`
+  (single source of truth shared with the webhook writer).
+
 Still open:
 
 - Coolify scheduled database backups (nightly, S3, 14-day retention) are
   documented but not yet configured — needs the production database to
   exist first.
-- `/reports/weekly` still labels its window `"This week · pilot report"`
-  while counting all-time rows; decide whether the pilot report is
-  trailing-7-days before anyone quotes it.
 - Message resolve workflow (see above): `unresolved_messages` ages items
   out after 7 days rather than tracking real resolution.

@@ -67,7 +67,7 @@ import {
   liveCallingBlockedReason,
 } from "../lib/onboarding";
 import { dispatchQueuedCall, enqueueCallForLead } from "../lib/callQueue";
-import { getCurrentUsageRow, periodLabel } from "../lib/usage";
+import { getCurrentUsageRow, periodLabel, VOICE_COST_PER_MINUTE } from "../lib/usage";
 import {
   AvailabilityError,
   BookingError,
@@ -664,11 +664,21 @@ router.get("/today", async (_req, res): Promise<void> => {
 router.get("/reports/weekly", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
-  const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
-  const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
-  const appointments = await db.select().from(appointmentsTable).where(eq(appointmentsTable.businessId, BUSINESS_ID));
-  const usage = await getCurrentUsageRow(db, BUSINESS_ID);
-  res.json(GetWeeklyReportResponse.parse({ period_label: "This week · pilot report", leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: Number(usage?.voiceMinutes ?? 0), estimated_provider_cost: Number(usage?.estimatedCost ?? 0) }));
+  // The pilot report covers the trailing 7 days, and the label is computed
+  // from that exact window — before this change the label said "This week"
+  // while every number was all-time, so the two could never agree.
+  // Voice minutes and cost are derived from the in-window call durations
+  // (at the same per-minute rate the webhook writer accrues with), because
+  // the monthly usage rows cannot be sliced by week.
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
+  const leads = await db.select().from(leadsTable).where(and(eq(leadsTable.businessId, BUSINESS_ID), gte(leadsTable.createdAt, weekAgo)));
+  const calls = await db.select().from(callsTable).where(and(eq(callsTable.businessId, BUSINESS_ID), gte(callsTable.createdAt, weekAgo)));
+  const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), gte(appointmentsTable.startTime, weekAgo)));
+  const windowSeconds = calls.reduce((sum, call) => sum + (call.durationSeconds ?? 0), 0);
+  const voiceMinutes = Number((windowSeconds / 60).toFixed(2));
+  const windowFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: business?.timezone ?? "UTC" });
+  res.json(GetWeeklyReportResponse.parse({ period_label: `${windowFmt.format(weekAgo)} – ${windowFmt.format(new Date())} · pilot report`, leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: voiceMinutes, estimated_provider_cost: Number((voiceMinutes * VOICE_COST_PER_MINUTE).toFixed(2)) }));
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {

@@ -6,7 +6,8 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev-postgres": "node ./src/dev-postgres.mjs"
+    "dev-postgres": "node ./src/dev-postgres.mjs",
+    "demo": "node ./src/demo.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

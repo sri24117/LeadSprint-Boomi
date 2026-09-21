@@ -124,7 +124,11 @@ describe("enqueueCallForLead", () => {
     expect(result?.call.status).toBe("queued");
     const jobs = await db.select().from(workflowJobsTable);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.idempotencyKey).toBe(result?.call.id);
+    // The workflow job shares the call's *stable* idempotency key (not the
+    // call row's PK) so the cron worker can find the call it belongs to and
+    // a replay cannot create a second job. See lib/callQueue.ts and the
+    // 2026-09-17 audit, issue #4.
+    expect(jobs[0]?.idempotencyKey).toBe(intakeIdempotencyKey(leadId));
   });
 
   it("is idempotent: a replayed intake never creates a second call", async () => {
