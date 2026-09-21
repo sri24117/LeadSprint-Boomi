@@ -85,6 +85,14 @@ export async function getCurrentUsageRow(
   return winner;
 }
 
+/**
+ * Estimated provider cost per voice minute (Retell's current list price
+ * for outbound voice). Single source of truth: the webhook writer uses
+ * this when accruing monthly usage, and the weekly report uses it when
+ * deriving window-scoped estimates from call durations.
+ */
+export const VOICE_COST_PER_MINUTE = 0.12;
+
 /** Add completed-call minutes (and their estimated cost) to the current month. */
 export async function recordVoiceUsage(
   dbHandle: DbHandle,

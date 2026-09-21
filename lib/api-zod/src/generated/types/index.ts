@@ -38,7 +38,6 @@ export * from './leadImportRow';
 export * from './leadStatus';
 export * from './leadUpdate';
 export * from './leadUpdateStatus';
-export * from './loginInput';
 export * from './notFoundResponse';
 export * from './onboardingChecklist';
 export * from './readinessStatus';

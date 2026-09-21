@@ -5,13 +5,10 @@ import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
-const rawPort = process.env.PORT;
-
-if (!rawPort) {
-  throw new Error(
-    'PORT environment variable is required but was not provided.',
-  );
-}
+// PORT and BASE_PATH are always provided by Replit, CI and the Dockerfile
+// (PORT=5000, BASE_PATH=/). Plain local development gets sane defaults so
+// `pnpm --filter @workspace/leadsprint run dev` works out of the box.
+const rawPort = process.env.PORT ?? '5173';
 
 const port = Number(rawPort);
 
@@ -19,13 +16,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    'BASE_PATH environment variable is required but was not provided.',
-  );
-}
+const basePath = process.env.BASE_PATH ?? '/';
 
 export default defineConfig({
   base: basePath,
@@ -71,6 +62,16 @@ export default defineConfig({
     allowedHosts: true,
     fs: {
       strict: true,
+    },
+    // Local development: the console talks to the API over relative URLs
+    // (same-origin in the single-container deployment). When running the
+    // Vite dev server separately from the API server, forward /api to it
+    // so the documented two-terminal dev flow works without CORS.
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
     },
   },
   preview: {
