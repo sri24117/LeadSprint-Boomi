@@ -67,36 +67,6 @@ export const GetAuthMeResponse = zod.object({
 
 
 /**
- * @summary Start an operator session
- */
-export const LoginBody = zod.object({
-  "email": zod.string()
-})
-
-export const LoginResponse = zod.object({
-  "user": zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "email": zod.string(),
-  "role": zod.enum(['owner', 'admin', 'operator'])
-}),
-  "business": zod.object({
-  "id": zod.string(),
-  "name": zod.string(),
-  "market": zod.enum(['US', 'IN']),
-  "timezone": zod.string(),
-  "phone_number": zod.string(),
-  "transfer_number": zod.string(),
-  "recording_disclosure": zod.boolean(),
-  "ai_disclosure": zod.boolean(),
-  "quiet_hours": zod.string(),
-  "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
-})
-})
-
-
-/**
  * @summary End the operator session
  */
 export const LogoutResponse = zod.void()
@@ -419,7 +389,7 @@ export const GetCallsResponseItem = zod.object({
   "lead_name": zod.string(),
   "phone": zod.string(),
   "provider": zod.string(),
-  "status": zod.enum(['created', 'policy_blocked', 'queued', 'provider_requesting', 'provider_accepted', 'in_progress', 'completed', 'failed', 'uncertain']),
+  "status": zod.enum(['queued', 'in_progress', 'completed', 'failed', 'uncertain', 'policy_blocked']),
   "started_at": zod.string().nullable(),
   "ended_at": zod.string().nullable(),
   "duration_seconds": zod.number().nullable(),
@@ -445,7 +415,7 @@ export const StartCallResponse = zod.object({
   "lead_name": zod.string(),
   "phone": zod.string(),
   "provider": zod.string(),
-  "status": zod.enum(['created', 'policy_blocked', 'queued', 'provider_requesting', 'provider_accepted', 'in_progress', 'completed', 'failed', 'uncertain']),
+  "status": zod.enum(['queued', 'in_progress', 'completed', 'failed', 'uncertain', 'policy_blocked']),
   "started_at": zod.string().nullable(),
   "ended_at": zod.string().nullable(),
   "duration_seconds": zod.number().nullable(),
@@ -470,7 +440,7 @@ export const GetCallResponse = zod.object({
   "lead_name": zod.string(),
   "phone": zod.string(),
   "provider": zod.string(),
-  "status": zod.enum(['created', 'policy_blocked', 'queued', 'provider_requesting', 'provider_accepted', 'in_progress', 'completed', 'failed', 'uncertain']),
+  "status": zod.enum(['queued', 'in_progress', 'completed', 'failed', 'uncertain', 'policy_blocked']),
   "started_at": zod.string().nullable(),
   "ended_at": zod.string().nullable(),
   "duration_seconds": zod.number().nullable(),
@@ -496,7 +466,7 @@ export const RetryCallResponse = zod.object({
   "lead_name": zod.string(),
   "phone": zod.string(),
   "provider": zod.string(),
-  "status": zod.enum(['created', 'policy_blocked', 'queued', 'provider_requesting', 'provider_accepted', 'in_progress', 'completed', 'failed', 'uncertain']),
+  "status": zod.enum(['queued', 'in_progress', 'completed', 'failed', 'uncertain', 'policy_blocked']),
   "started_at": zod.string().nullable(),
   "ended_at": zod.string().nullable(),
   "duration_seconds": zod.number().nullable(),

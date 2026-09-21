@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "generate": "pnpm --filter @workspace/api-spec run codegen"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

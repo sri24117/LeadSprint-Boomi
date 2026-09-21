@@ -60,10 +60,6 @@ export interface Error {
   error: string;
 }
 
-export interface LoginInput {
-  email: string;
-}
-
 export type UserRole = typeof UserRole[keyof typeof UserRole];
 
 
@@ -253,15 +249,12 @@ export type CallStatus = typeof CallStatus[keyof typeof CallStatus];
 
 
 export const CallStatus = {
-  created: 'created',
-  policy_blocked: 'policy_blocked',
   queued: 'queued',
-  provider_requesting: 'provider_requesting',
-  provider_accepted: 'provider_accepted',
   in_progress: 'in_progress',
   completed: 'completed',
   failed: 'failed',
   uncertain: 'uncertain',
+  policy_blocked: 'policy_blocked',
 } as const;
 
 export interface Call {
