@@ -24,7 +24,12 @@ const DATA_DIR =
 
 fs.mkdirSync(path.dirname(path.resolve(DATA_DIR)), { recursive: true });
 const db = await PGlite.create({ dataDir: DATA_DIR });
-const server = new PGLiteSocketServer({ db, port: PORT, host: "127.0.0.1" });
+const server = new PGLiteSocketServer({
+  db,
+  port: PORT,
+  host: "127.0.0.1",
+  maxConnections: 20,
+});
 await server.start();
 
 console.log(`[dev-postgres] listening on 127.0.0.1:${PORT} (data: ${DATA_DIR})`);
