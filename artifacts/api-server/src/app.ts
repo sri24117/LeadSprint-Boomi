@@ -119,7 +119,7 @@ if (staticDir) {
   // SPA fallback — any non-API, non-file GET request resolves to index.html
   // so client-side routing (operator console deep links) works on refresh.
   app.get(/^(?!\/api).*/, (_req, res) => {
-    res.sendFile(path.join(resolvedStaticDir, "index.html"));
+    res.sendFile("index.html", { root: resolvedStaticDir });
   });
 }
 
