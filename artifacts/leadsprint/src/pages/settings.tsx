@@ -1,16 +1,23 @@
 import { useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   Check,
+  CheckCircle2,
   Loader2,
   MessageSquare,
+  PhoneCall,
   ShieldCheck,
   SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
 import {
   getGetBusinessSettingsQueryKey,
+  getGetCallsQueryKey,
+  getGetLeadsQueryKey,
   useGetBusinessSettings,
+  useImportLeads,
+  useStartCall,
   useUpdateBusinessSettings,
 } from '@workspace/api-client-react';
 import { Badge, Button, ErrorState, Skeleton } from '@/components/common';
@@ -143,8 +150,13 @@ function ServiceRow({ label, value }: { label: string; value?: string | null }) 
 export default function SettingsPage() {
   const settings = useGetBusinessSettings();
   const update = useUpdateBusinessSettings();
+  const importLeads = useImportLeads();
+  const startCall = useStartCall();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<any>(null);
+  const [testPhone, setTestPhone] = useState('');
+  const [testStatus, setTestStatus] = useState<'idle' | 'calling' | 'success' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState<string | null>(null);
 
   if (settings.isLoading) {
     return (
@@ -183,6 +195,66 @@ export default function SettingsPage() {
         onSuccess: (updated) => {
           setDraft(updated);
           queryClient.setQueryData(getGetBusinessSettingsQueryKey(), updated);
+        },
+      },
+    );
+  };
+
+  const handleSendTestCall = () => {
+    const phoneToCall = testPhone.trim() || data.transfer_number?.trim();
+    if (!phoneToCall) {
+      setTestStatus('error');
+      setTestMessage('Please enter a phone number to test.');
+      return;
+    }
+    setTestStatus('calling');
+    setTestMessage('Registering test lead and dispatching call…');
+
+    importLeads.mutate(
+      {
+        data: {
+          rows: [
+            {
+              name: 'Operator Voice Test',
+              phone: phoneToCall,
+              project: data.project_name || 'Pilot project',
+              property_type: 'Voice quality check',
+              budget_label: '$750k',
+              timeline: 'Immediate',
+              source: 'Settings voice test',
+            },
+          ],
+          consent_status: 'valid',
+          consent_source: 'Operator manual voice test authorization',
+        },
+      },
+      {
+        onSuccess: (res: any) => {
+          const leadId = res?.leads?.[0]?.id;
+          if (leadId) {
+            startCall.mutate(
+              { data: { lead_id: leadId } },
+              {
+                onSuccess: () => {
+                  setTestStatus('success');
+                  setTestMessage(`Call dispatched to ${phoneToCall}! Pick up to test the AI voice agent.`);
+                  queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
+                  queryClient.invalidateQueries({ queryKey: getGetLeadsQueryKey() });
+                },
+                onError: (err: any) => {
+                  setTestStatus('error');
+                  setTestMessage(err?.message || 'Call blocked: Check quiet hours or if Retell credentials are configured.');
+                },
+              },
+            );
+          } else {
+            setTestStatus('error');
+            setTestMessage('Could not register test contact.');
+          }
+        },
+        onError: (err: any) => {
+          setTestStatus('error');
+          setTestMessage(err?.message || 'Failed to initiate test call.');
         },
       },
     );
@@ -286,6 +358,62 @@ export default function SettingsPage() {
                 <ServiceRow label="Retell agent" value={data.retell_agent_id} />
                 <ServiceRow label="Cal.com event type" value={data.cal_event_type_id} />
               </div>
+            </div>
+
+            <div className="rounded-lg border border-[hsl(var(--accent)/.35)] bg-[hsl(var(--accent)/.05)] p-4">
+              <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[hsl(var(--accent))]">
+                <PhoneCall size={14} /> Test AI Voice Call
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Dial your personal phone to experience the AI voice quality, response latency, and qualification script.
+              </p>
+              <div className="mt-3 flex gap-2">
+                <input
+                  type="tel"
+                  value={testPhone}
+                  onChange={(e) => {
+                    setTestPhone(e.target.value);
+                    if (testStatus !== 'idle') setTestStatus('idle');
+                  }}
+                  placeholder={data.transfer_number || '+19175550188'}
+                  className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-xs outline-none focus:border-[hsl(var(--accent))]"
+                  data-testid="input-test-phone"
+                />
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={handleSendTestCall}
+                  disabled={testStatus === 'calling' || importLeads.isPending || startCall.isPending}
+                  className="shrink-0 text-xs"
+                  data-testid="button-test-call"
+                >
+                  {testStatus === 'calling' ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <PhoneCall size={13} />
+                  )}
+                  {testStatus === 'calling' ? 'Calling…' : 'Call My Phone'}
+                </Button>
+              </div>
+              {testMessage && (
+                <div
+                  className={`mt-2.5 flex items-center gap-1.5 text-xs font-medium ${
+                    testStatus === 'success'
+                      ? 'text-[hsl(var(--accent))]'
+                      : testStatus === 'error'
+                        ? 'text-[hsl(var(--destructive))]'
+                        : 'text-muted-foreground'
+                  }`}
+                  data-testid="text-test-call-status"
+                >
+                  {testStatus === 'success' ? (
+                    <CheckCircle2 size={13} className="shrink-0" />
+                  ) : testStatus === 'error' ? (
+                    <AlertTriangle size={13} className="shrink-0" />
+                  ) : null}
+                  <span>{testMessage}</span>
+                </div>
+              )}
             </div>
           </div>
         </section>

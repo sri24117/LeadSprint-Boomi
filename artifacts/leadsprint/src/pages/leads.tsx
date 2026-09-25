@@ -7,10 +7,12 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Download,
   Filter,
   Loader2,
   Phone,
   PhoneCall,
+  Plus,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -294,6 +296,19 @@ export default function LeadsPage() {
   const [consentSource, setConsentSource] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [showAddLead, setShowAddLead] = useState(false);
+  const [addLeadError, setAddLeadError] = useState<string | null>(null);
+  const [addLeadForm, setAddLeadForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    property_type: 'Condo',
+    project: 'Direct enquiry',
+    budget_label: '$500k – $800k',
+    timeline: 'Immediate (0–3 months)',
+    consent_source: 'Direct client phone/walk-in inquiry',
+    call_immediately: true,
+  });
   const importLeads = useImportLeads();
 
   const params = useMemo(
@@ -308,6 +323,124 @@ export default function LeadsPage() {
   const leads = useGetLeads(params);
   const startCall = useStartCall();
   const queryClient = useQueryClient();
+
+  const handleExportCsv = () => {
+    if (!leads.data?.length) return;
+    const headers = [
+      'Name',
+      'Phone',
+      'Email',
+      'Property Type',
+      'Project',
+      'Budget',
+      'Timeline',
+      'Score',
+      'Intent Score',
+      'Status',
+      'Consent Status',
+      'Consent Source',
+      'Next Action',
+      'Last Call',
+    ];
+    const escapeCsv = (val?: string | number | null) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replaceAll('"', '""');
+      return `"${str}"`;
+    };
+    const rows = leads.data.map((lead) => [
+      escapeCsv(lead.name),
+      escapeCsv(lead.phone),
+      escapeCsv(lead.email),
+      escapeCsv(lead.property_type),
+      escapeCsv(lead.project),
+      escapeCsv(lead.budget_label),
+      escapeCsv(lead.timeline),
+      escapeCsv(lead.score),
+      escapeCsv(lead.intent_score),
+      escapeCsv(lead.status),
+      escapeCsv(lead.consent_status),
+      escapeCsv(lead.consent_source),
+      escapeCsv(lead.next_action),
+      escapeCsv(lead.last_call),
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `leadsprint-leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleAddLead = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddLeadError(null);
+    if (!addLeadForm.name.trim()) {
+      setAddLeadError('Please enter a lead name.');
+      return;
+    }
+    if (!addLeadForm.phone.trim()) {
+      setAddLeadError('Please enter a valid phone number.');
+      return;
+    }
+    if (!addLeadForm.consent_source.trim()) {
+      setAddLeadError('Please record where consent was obtained.');
+      return;
+    }
+
+    importLeads.mutate(
+      {
+        data: {
+          rows: [
+            {
+              name: addLeadForm.name.trim(),
+              phone: addLeadForm.phone.trim(),
+              email: addLeadForm.email.trim() || undefined,
+              property_type: addLeadForm.property_type.trim() || undefined,
+              project: addLeadForm.project.trim() || undefined,
+              budget_label: addLeadForm.budget_label.trim() || undefined,
+              timeline: addLeadForm.timeline.trim() || undefined,
+              source: 'Manual entry',
+            },
+          ],
+          consent_status: 'valid',
+          consent_source: addLeadForm.consent_source.trim(),
+        },
+      },
+      {
+        onSuccess: (res: any) => {
+          setShowAddLead(false);
+          queryClient.invalidateQueries({ queryKey: getGetLeadsQueryKey() });
+          const newLead = res?.leads?.[0];
+          if (addLeadForm.call_immediately && newLead?.id) {
+            startCall.mutate(
+              { data: { lead_id: newLead.id } },
+              {
+                onSuccess: () => {
+                  queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
+                },
+              },
+            );
+          }
+          setAddLeadForm({
+            name: '',
+            phone: '',
+            email: '',
+            property_type: 'Condo',
+            project: 'Direct enquiry',
+            budget_label: '$500k – $800k',
+            timeline: 'Immediate (0–3 months)',
+            consent_source: 'Direct client phone/walk-in inquiry',
+            call_immediately: true,
+          });
+        },
+        onError: (err: any) => {
+          setAddLeadError(err?.message || 'Failed to save lead. Please check details.');
+        },
+      },
+    );
+  };
 
   const handleImport = (event: any) => {
     const file = event.target.files?.[0] as File | undefined;
@@ -359,10 +492,23 @@ export default function LeadsPage() {
             <span className="text-border">/</span> sorted by latest signal
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="primary" onClick={() => setShowAddLead(true)} data-testid="button-open-add-lead">
+            <Plus size={15} />
+            Add Lead
+          </Button>
           <Button onClick={() => setShowImport(true)} data-testid="button-open-import">
             <Upload size={15} />
             Import CSV
+          </Button>
+          <Button
+            onClick={handleExportCsv}
+            disabled={!leads.data?.length}
+            data-testid="button-export-leads"
+            title="Download visible leads as CSV"
+          >
+            <Download size={15} />
+            Export CSV
           </Button>
           <Link
             href="/workspace/leads"
@@ -571,6 +717,156 @@ export default function LeadsPage() {
             <Button variant="quiet" className="mt-5 w-full" onClick={() => setShowImport(false)} data-testid="button-cancel-import">
               Cancel
             </Button>
+          </div>
+        </div>
+      )}
+
+      {showAddLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#102632]/35 p-5">
+          <div className="w-full max-w-[500px] rounded-2xl border border-border bg-[hsl(var(--card))] p-6 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-border pb-4">
+              <div>
+                <h2 className="text-lg font-bold">Add New Lead</h2>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Quickly register an inbound lead and optionally trigger an instant AI qualification call.
+                </p>
+              </div>
+              <button onClick={() => setShowAddLead(false)} data-testid="button-close-add-lead">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddLead} className="mt-4 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold">
+                  Full Name *
+                  <input
+                    required
+                    value={addLeadForm.name}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g. Michael Scott"
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-name"
+                  />
+                </label>
+                <label className="block text-xs font-semibold">
+                  Phone Number *
+                  <input
+                    required
+                    value={addLeadForm.phone}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    placeholder="+19175550188"
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-phone"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold">
+                  Email (Optional)
+                  <input
+                    type="email"
+                    value={addLeadForm.email}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, email: e.target.value }))}
+                    placeholder="client@example.com"
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-email"
+                  />
+                </label>
+                <label className="block text-xs font-semibold">
+                  Property Type
+                  <input
+                    value={addLeadForm.property_type}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, property_type: e.target.value }))}
+                    placeholder="Condo, Single Family, etc."
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-property-type"
+                  />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold">
+                  Target Budget
+                  <input
+                    value={addLeadForm.budget_label}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, budget_label: e.target.value }))}
+                    placeholder="$600k – $900k"
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-budget"
+                  />
+                </label>
+                <label className="block text-xs font-semibold">
+                  Timeline
+                  <input
+                    value={addLeadForm.timeline}
+                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, timeline: e.target.value }))}
+                    placeholder="1–3 months"
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    data-testid="input-add-lead-timeline"
+                  />
+                </label>
+              </div>
+
+              <label className="block text-xs font-semibold">
+                Consent Evidence Source *
+                <input
+                  required
+                  value={addLeadForm.consent_source}
+                  onChange={(e) => setAddLeadForm((prev) => ({ ...prev, consent_source: e.target.value }))}
+                  placeholder="e.g. Phone inquiry, Open House walk-in"
+                  className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                  data-testid="input-add-lead-consent-source"
+                />
+                <span className="mt-1 block text-[11px] font-normal text-muted-foreground">
+                  TCPA compliance requirement: records why this contact may be dialed.
+                </span>
+              </label>
+
+              <label className="flex items-center gap-2.5 rounded-lg border border-border bg-[hsl(var(--muted)/.4)] p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={addLeadForm.call_immediately}
+                  onChange={(e) => setAddLeadForm((prev) => ({ ...prev, call_immediately: e.target.checked }))}
+                  className="h-4 w-4 rounded border-input text-[hsl(var(--accent))] focus:ring-0"
+                  data-testid="checkbox-add-lead-call-now"
+                />
+                <div>
+                  <span className="block text-xs font-semibold">Call lead immediately</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    Queues and starts the AI qualification call as soon as the lead is saved.
+                  </span>
+                </div>
+              </label>
+
+              {addLeadError && (
+                <p className="text-xs text-[hsl(var(--destructive))]" data-testid="text-add-lead-error">
+                  {addLeadError}
+                </p>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  variant="primary"
+                  type="submit"
+                  disabled={importLeads.isPending}
+                  className="flex-1"
+                  data-testid="button-submit-add-lead"
+                >
+                  {importLeads.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                  {importLeads.isPending ? 'Saving Lead…' : 'Save Lead'}
+                </Button>
+                <Button
+                  variant="quiet"
+                  type="button"
+                  onClick={() => setShowAddLead(false)}
+                  data-testid="button-cancel-add-lead"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}
