@@ -100,8 +100,12 @@ app.use(
       res.status(err.statusCode).json({ error: err.message });
       return;
     }
-    req.log?.error({ err }, "Unhandled API error");
-    res.status(500).json({ error: "Internal server error" });
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    req.log?.error({ err, detail: errorMessage }, "Unhandled API error");
+    res.status(500).json({
+      error: "Internal server error",
+      detail: process.env.NODE_ENV !== "production" ? errorMessage : undefined,
+    });
   },
 );
 

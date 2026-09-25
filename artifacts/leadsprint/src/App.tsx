@@ -249,14 +249,14 @@ function ClerkAuthGate({ children }: { children: ReactNode }) {
   });
   if (!isLoaded || (isSignedIn && auth.isLoading)) return <AuthSkeleton />;
   if (!isSignedIn) return <LandingPage />;
-  if (auth.isError || !auth.data) return <AuthError />;
+  if (auth.isError || !auth.data) return <AuthError error={auth.error} />;
   return <Shell session={auth.data}>{children}</Shell>;
 }
 
 function DemoAuthGate({ children }: { children: ReactNode }) {
   const auth = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
   if (auth.isLoading) return <AuthSkeleton />;
-  if (auth.isError || !auth.data) return <AuthError />;
+  if (auth.isError || !auth.data) return <AuthError error={auth.error} />;
   return <Shell session={auth.data}>{children}</Shell>;
 }
 
@@ -334,8 +334,9 @@ function LandingPage() {
   );
 }
 
-function AuthError() {
+function AuthError({ error }: { error?: unknown }) {
   const signOutAction = useSignOutAction();
+  const rawErr = (error as any)?.data?.detail || (error as any)?.data?.error || (error as any)?.message;
   return (
     <div className="flex min-h-[100dvh] items-center justify-center bg-background px-5">
       <div className="w-full max-w-[420px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center">
@@ -344,6 +345,11 @@ function AuthError() {
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Your sign-in is valid, but the operator workspace could not be loaded. Try again or sign out.
         </p>
+        {rawErr && (
+          <div className="mt-4 rounded-lg bg-[hsl(var(--muted)/.8)] p-3 text-left font-mono text-[11px] text-[hsl(var(--muted-foreground))] break-words">
+            {String(rawErr)}
+          </div>
+        )}
         <div className="mt-6 flex justify-center gap-2">
           <Button onClick={() => window.location.reload()} variant="primary">
             Try again
