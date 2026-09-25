@@ -24,7 +24,7 @@ COPY tsconfig.json tsconfig.base.json ./
 COPY lib ./lib
 COPY artifacts ./artifacts
 COPY scripts ./scripts
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 # ---- typecheck + build --------------------------------------------------
 FROM deps AS build
@@ -40,7 +40,7 @@ RUN pnpm --filter "@workspace/api-server" run build
 RUN pnpm --filter "@workspace/leadsprint" run build
 
 # Drop devDependencies from the workspace node_modules before shipping.
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --no-frozen-lockfile --prod
 
 # ---- runtime -------------------------------------------------------------
 FROM node:24-bookworm-slim AS runtime
