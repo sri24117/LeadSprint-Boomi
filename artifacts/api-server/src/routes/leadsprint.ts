@@ -634,27 +634,67 @@ router.get("/today", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
-  const leads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID));
-  const calls = await db.select().from(callsTable).where(eq(callsTable.businessId, BUSINESS_ID));
-  const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")));
-  const activities = await db.select().from(activitiesTable).where(eq(activitiesTable.businessId, BUSINESS_ID)).orderBy(desc(activitiesTable.createdAt)).limit(8);
+
+  const [leadMetrics] = await db
+    .select({
+      newLeads: sql<number>`count(*) filter (where ${leadsTable.status} = 'new')::int`,
+      hotLeads: sql<number>`count(*) filter (where ${leadsTable.score} = 'hot')::int`,
+    })
+    .from(leadsTable)
+    .where(eq(leadsTable.businessId, BUSINESS_ID));
+
+  const [callMetrics] = await db
+    .select({
+      callsInProgress: sql<number>`count(*) filter (where ${callsTable.status} = 'in_progress')::int`,
+      failedCalls: sql<number>`count(*) filter (where ${callsTable.status} in ('failed', 'uncertain'))::int`,
+    })
+    .from(callsTable)
+    .where(eq(callsTable.businessId, BUSINESS_ID));
+
+  const appointments = await db
+    .select()
+    .from(appointmentsTable)
+    .where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")))
+    .orderBy(appointmentsTable.startTime);
+
+  const activities = await db
+    .select()
+    .from(activitiesTable)
+    .where(eq(activitiesTable.businessId, BUSINESS_ID))
+    .orderBy(desc(activitiesTable.createdAt))
+    .limit(8);
+
   const upcoming = await Promise.all(appointments.map((row) => getAppointmentDto(row, BUSINESS_ID)));
-  // Message-type activities are the operator's follow-up queue: caller
-  // messages captured mid-call and failed-transfer captures. There is no
-  // resolve workflow yet, so "unresolved" is scoped to the trailing 7
-  // days — recent items awaiting action — rather than an all-time count
-  // that could never go down or the hard-coded 1 that used to sit here.
+
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const recentMessages = await db.select({ id: activitiesTable.id }).from(activitiesTable).where(and(eq(activitiesTable.businessId, BUSINESS_ID), eq(activitiesTable.type, "message"), gte(activitiesTable.createdAt, weekAgo)));
+  const [recentMessages] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(activitiesTable)
+    .where(
+      and(
+        eq(activitiesTable.businessId, BUSINESS_ID),
+        eq(activitiesTable.type, "message"),
+        gte(activitiesTable.createdAt, weekAgo),
+      ),
+    );
+
   const warnings = [
     ...(hasRetellConfigForMarket() ? [] : ["Retell live calling is not configured; calls stay in safe demo mode"]),
     ...(hasCalConfig() ? [] : ["Cal.com live booking is not configured; availability stays simulated"]),
     ...(business?.market === "IN" && !hasTwilioRoute("IN") ? ["India telephony route is not configured"] : []),
     ...(business?.market !== "IN" && !hasTwilioRoute("US") ? ["US telephony route is not configured"] : []),
   ];
+
   res.json(GetTodayResponse.parse({
     date_label: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: business?.timezone ?? "UTC" }).format(new Date()),
-    metrics: { new_leads: leads.filter((lead) => lead.status === "new").length, calls_in_progress: calls.filter((call) => call.status === "in_progress").length, hot_leads: leads.filter((lead) => lead.score === "hot").length, appointments_today: appointments.length, failed_calls: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, unresolved_messages: recentMessages.length },
+    metrics: {
+      new_leads: leadMetrics?.newLeads ?? 0,
+      calls_in_progress: callMetrics?.callsInProgress ?? 0,
+      hot_leads: leadMetrics?.hotLeads ?? 0,
+      appointments_today: appointments.length,
+      failed_calls: callMetrics?.failedCalls ?? 0,
+      unresolved_messages: recentMessages?.count ?? 0,
+    },
     setup_warnings: warnings,
     upcoming,
     recent_activity: activities.map((row) => ({ id: row.id, type: row.type, title: row.title, detail: row.detail, created_at: row.createdAt.toISOString() })),
@@ -664,21 +704,55 @@ router.get("/today", async (_req, res): Promise<void> => {
 router.get("/reports/weekly", async (_req, res): Promise<void> => {
   const req = _req;
   const BUSINESS_ID = scopedBusinessId(req);
-  // The pilot report covers the trailing 7 days, and the label is computed
-  // from that exact window — before this change the label said "This week"
-  // while every number was all-time, so the two could never agree.
-  // Voice minutes and cost are derived from the in-window call durations
-  // (at the same per-minute rate the webhook writer accrues with), because
-  // the monthly usage rows cannot be sliced by week.
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
-  const leads = await db.select().from(leadsTable).where(and(eq(leadsTable.businessId, BUSINESS_ID), gte(leadsTable.createdAt, weekAgo)));
-  const calls = await db.select().from(callsTable).where(and(eq(callsTable.businessId, BUSINESS_ID), gte(callsTable.createdAt, weekAgo)));
-  const appointments = await db.select().from(appointmentsTable).where(and(eq(appointmentsTable.businessId, BUSINESS_ID), gte(appointmentsTable.startTime, weekAgo)));
-  const windowSeconds = calls.reduce((sum, call) => sum + (call.durationSeconds ?? 0), 0);
-  const voiceMinutes = Number((windowSeconds / 60).toFixed(2));
+
+  const [callStats] = await db
+    .select({
+      callsAttempted: sql<number>`count(*)::int`,
+      callsConnected: sql<number>`count(*) filter (where ${callsTable.status} in ('completed', 'in_progress'))::int`,
+      transferredCount: sql<number>`count(*) filter (where ${callsTable.transferred} = true)::int`,
+      failedActions: sql<number>`count(*) filter (where ${callsTable.status} in ('failed', 'uncertain'))::int`,
+      totalDurationSeconds: sql<number>`coalesce(sum(${callsTable.durationSeconds}), 0)::int`,
+    })
+    .from(callsTable)
+    .where(and(eq(callsTable.businessId, BUSINESS_ID), gte(callsTable.createdAt, weekAgo)));
+
+  const [leadStats] = await db
+    .select({
+      leadsReceived: sql<number>`count(*)::int`,
+      qualifiedLeads: sql<number>`count(*) filter (where ${leadsTable.status} in ('qualified', 'booked'))::int`,
+    })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.businessId, BUSINESS_ID), gte(leadsTable.createdAt, weekAgo)));
+
+  const [apptStats] = await db
+    .select({
+      appointmentsBooked: sql<number>`count(*)::int`,
+    })
+    .from(appointmentsTable)
+    .where(and(eq(appointmentsTable.businessId, BUSINESS_ID), gte(appointmentsTable.startTime, weekAgo)));
+
+  const callsAttempted = callStats?.callsAttempted ?? 0;
+  const transferredCount = callStats?.transferredCount ?? 0;
+  const durationSeconds = callStats?.totalDurationSeconds ?? 0;
+  const voiceMinutes = Number((durationSeconds / 60).toFixed(2));
+  const transferRate = callsAttempted > 0 ? transferredCount / callsAttempted : 0;
+
   const windowFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: business?.timezone ?? "UTC" });
-  res.json(GetWeeklyReportResponse.parse({ period_label: `${windowFmt.format(weekAgo)} – ${windowFmt.format(new Date())} · pilot report`, leads_received: leads.length, calls_attempted: calls.length, calls_connected: calls.filter((call) => call.status === "completed" || call.status === "in_progress").length, qualified_leads: leads.filter((lead) => lead.status === "qualified" || lead.status === "booked").length, appointments_booked: appointments.length, transfer_rate: calls.length ? calls.filter((call) => call.transferred).length / calls.length : 0, failed_actions: calls.filter((call) => call.status === "failed" || call.status === "uncertain").length, voice_minutes: voiceMinutes, estimated_provider_cost: Number((voiceMinutes * VOICE_COST_PER_MINUTE).toFixed(2)) }));
+
+  res.json(GetWeeklyReportResponse.parse({
+    period_label: `${windowFmt.format(weekAgo)} – ${windowFmt.format(new Date())} · pilot report`,
+    leads_received: leadStats?.leadsReceived ?? 0,
+    calls_attempted: callsAttempted,
+    calls_connected: callStats?.callsConnected ?? 0,
+    qualified_leads: leadStats?.qualifiedLeads ?? 0,
+    appointments_booked: apptStats?.appointmentsBooked ?? 0,
+    transfer_rate: transferRate,
+    failed_actions: callStats?.failedActions ?? 0,
+    voice_minutes: voiceMinutes,
+    estimated_provider_cost: Number((voiceMinutes * VOICE_COST_PER_MINUTE).toFixed(2)),
+  }));
 });
 
 router.get("/usage", async (_req, res): Promise<void> => {

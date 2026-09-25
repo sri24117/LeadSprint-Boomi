@@ -39,6 +39,42 @@ const router: IRouter = Router();
 // runs before any signature check — a flood must be shed cheaply.
 router.use(createWebhookLimiter());
 
+/**
+ * Validates timestamp freshness to prevent webhook replay attacks.
+ * Accepts Date, ISO string, or numeric epoch timestamp (seconds or milliseconds).
+ * Returns true if the timestamp is within maxAgeSeconds (default 300s = 5m) of now.
+ */
+export function isTimestampFresh(
+  timestamp: Date | string | number | undefined | null,
+  maxAgeSeconds = 300,
+): boolean {
+  if (timestamp === undefined || timestamp === null || timestamp === "") {
+    return false;
+  }
+  let time: number;
+  if (typeof timestamp === "number") {
+    time = timestamp > 1e11 ? timestamp : timestamp * 1000;
+  } else if (timestamp instanceof Date) {
+    time = timestamp.getTime();
+  } else if (typeof timestamp === "string") {
+    if (/^\d+$/.test(timestamp.trim())) {
+      const num = Number(timestamp.trim());
+      time = num > 1e11 ? num : num * 1000;
+    } else {
+      time = new Date(timestamp).getTime();
+    }
+  } else {
+    return false;
+  }
+
+  if (!Number.isFinite(time) || Number.isNaN(time)) {
+    return false;
+  }
+
+  const skewMs = Math.abs(Date.now() - time);
+  return skewMs <= maxAgeSeconds * 1000;
+}
+
 // Overridable database handle — see lib/callQueue.ts for why the
 // acceptance tests run against a real embedded PostgreSQL rather than a mock.
 let db: typeof defaultDb = defaultDb;
@@ -109,6 +145,13 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     return;
   }
   const body = req.body as Record<string, unknown>;
+  const rawTimestamp = req.get("x-webhook-timestamp") ?? body.timestamp;
+  if (rawTimestamp !== undefined && rawTimestamp !== null && rawTimestamp !== "") {
+    if (!isTimestampFresh(rawTimestamp as string | number | Date, 300)) {
+      res.status(400).json({ error: "Webhook timestamp expired" });
+      return;
+    }
+  }
   const businessId = typeof body.business_id === "string" ? body.business_id : "";
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const phone = typeof body.phone === "string" ? body.phone.trim() : "";
@@ -198,7 +241,7 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
       // it under the same idempotency key. Non-retryable outcomes (e.g.
       // revoked consent) are already recorded as policy_blocked and are
       // operator-visible.
-      req.log.warn(
+      req.log?.warn?.(
         { businessId, leadId, callId: queued.call.id, outcome: dispatch.outcome },
         "Intake call was not started immediately",
       );
@@ -367,6 +410,10 @@ router.post("/webhooks/calcom", async (req, res): Promise<void> => {
     return;
   }
   const body = req.body as Record<string, unknown>;
+  if (body.createdAt !== undefined && body.createdAt !== null && !isTimestampFresh(body.createdAt as string, 300)) {
+    res.status(401).json({ error: "Stale Cal.com webhook timestamp" });
+    return;
+  }
   // Cal.com's real webhook envelope is { triggerEvent, createdAt, payload }.
   const payload = (body.payload && typeof body.payload === "object" ? body.payload : {}) as Record<string, unknown>;
   const metadata = (payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {}) as Record<string, unknown>;

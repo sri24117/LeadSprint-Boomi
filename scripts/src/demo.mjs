@@ -120,8 +120,9 @@ async function waitForHttp(url, what, timeoutMs = 90_000) {
 }
 
 function pnpm(args, extraEnv = {}) {
+  const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   return new Promise((resolve, reject) => {
-    execFile("pnpm", args, { cwd: REPO_ROOT, env: { ...process.env, ...extraEnv } }, (error, stdout, stderr) => {
+    execFile(pnpmCmd, args, { cwd: REPO_ROOT, env: { ...process.env, ...extraEnv }, shell: process.platform === "win32" }, (error, stdout, stderr) => {
       if (error) reject(new Error(`${pnpmBin(args)}: ${stderr || error.message}`));
       else resolve(stdout);
     });
