@@ -100,6 +100,20 @@ migration is silently blocked from ever applying. `migrate` and the
 migrator the app runs on boot share the same journal and are safe to run
 in any order or repeatedly.
 
+Already have a database that was created with `push`? Start the app once
+and it adopts it — it verifies every expected table is present, records the
+existing migrations as applied, and logs:
+
+```
+[db] This database already had the schema but no migration history
+     (provisioned outside the migrator, e.g. `drizzle-kit push`).
+     Recorded 1 existing migration(s) as applied so future migrations can run.
+```
+
+(`pnpm --filter @workspace/db run migrate` will still fail on such a
+database with `relation "activities" already exists` — it is the raw
+Drizzle CLI, with no adoption step. The app is the thing that adopts it.)
+
 ### Scheduled jobs
 
 Three endpoints are meant to run on a schedule (Coolify → Scheduled Tasks,

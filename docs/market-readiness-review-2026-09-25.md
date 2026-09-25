@@ -276,9 +276,11 @@ database that matters, while CI stays green (it only greps `testDb.ts` for two i
 `docs/pilot-acceptance.md` run `drizzle-kit migrate` (the same journal the app's boot migrator
 uses), the README says plainly never to `push` a deployed database, and a boot that cannot
 apply its schema now exits instead of serving traffic — which is what makes the failure
-visible rather than a footnote in the logs. For a database already created with `push`, either
-re-provision it or baseline the journal once:
-`INSERT INTO drizzle.__drizzle_migrations (hash, created_at) SELECT '<hash from meta/_journal.json>', <when>;`
+visible rather than a footnote in the logs. A database already created with `push` needs no manual step: the
+boot migrator verifies every table the migrations expect is present, records the existing
+migrations as applied using Drizzle's own hashes, and starts (see `lib/db/src/index.ts`). The
+manifest of that adoption is the log line `[db] This database already had the schema but no
+migration history …`. A *partial* schema is never adopted — it still refuses to start.
 
 ### P3-7 · "AI receptionist" but no inbound calls
 
@@ -345,7 +347,7 @@ once per process.
 | Billing accuracy | ✅ fixed | P1-1 — one call, one minute |
 | Operator trust | ✅ fixed | P1-2 — 201 means dialled; blocks surface with a reason |
 | Concurrency / scale | ✅ safe | P1-3 — jobs and calls are claimed atomically, so a cron and the internal worker can coexist; a single 2-core container is still the right size for 10–60 enquiries/week |
-| Test suite | ✅ good | 170 meaningful tests on real SQL (PGlite), not mocks; the acceptance path is still manual |
+| Test suite | ✅ good | 175 meaningful tests on real SQL (PGlite), not mocks; the acceptance path is still manual |
 | CI | ✅ good | typecheck + tests + both builds + codegen drift + DDL/index guards |
 | Schema management | ✅ fixed | P2-7 — migrations only, applied by the app; a boot that cannot migrate refuses to serve |
 | Failure visibility | 🟡 logs only | No error tracking, no alerting, no metrics |
@@ -428,12 +430,13 @@ verified with the repo's own pipeline plus the same live checks that exposed the
 | No double dial | `lib/callQueue.ts`, `lib/scheduler.ts` | Conditional-UPDATE claim of the call and of the job, stale-claim reaper, retry that can re-open a time-based block |
 | Overnight retries | `lib/policy.ts` | `nextAllowedCallTime()` — the opening of the next allowed window, in the recipient's timezone |
 | One schema path | `lib/db/package.json`, `scripts/src/demo.mjs`, `README.md`, `docs/pilot-acceptance.md`, `replit.md` | `drizzle-kit migrate` everywhere; `push` documented as never-for-production |
+| Adopt an existing schema | `lib/db/src/index.ts` | A database that already has the schema but no journal (`push`-created, or restored from a dump) is verified table-by-table and then baselined, so migrations apply instead of the boot refusing to start |
 | Fail closed on schema | `artifacts/api-server/src/index.ts` | A boot that cannot apply migrations exits instead of serving |
 | Honest Today metric | `routes/leadsprint.ts` | `appointments_today` counted in the business's local day, not all of history |
 | Console surfaces blocks | `pages/leads.tsx`, `pages/calls.tsx` | `onError` shows the API's reason instead of staying silent |
 | One worker implementation | `routes/cron.ts` | `POST /cron/process-jobs` delegates to `processQueuedJobs()`; the duplicated copy is gone |
 
-### Tests added (151 → 170, all passing)
+### Tests added (151 → 175, all passing)
 
 - `lib/concurrency.test.ts` — concurrent dispatch of one call dials once; two workers draining
   one job dial once; an abandoned claim is reclaimed; a live claim is left alone; an overnight
@@ -445,12 +448,16 @@ verified with the repo's own pipeline plus the same live checks that exposed the
   the same minute is not a success; a later attempt really re-dials; an unconfigured workspace
   refuses to dial; retry re-queues a time-based block and refuses a decision.
 - `routes/usage.test.ts` — `appointments_today` counts only the local day.
+- `test/migrationBaseline.test.ts` — a `push`-created database cannot be migrated before
+  adoption and migrates cleanly after, against Drizzle's own migrator; adoption is idempotent;
+  duplicate-object error codes are recognised through a cause chain and unrelated failures are
+  not mistaken for adoption; the expected-table list covers every table the migrations create.
 
 ### Verification run
 
 ```
 pnpm run typecheck                       clean (4 workspaces)
-pnpm --filter @workspace/api-server run test   170 passed (19 files)
+pnpm --filter @workspace/api-server run test   175 passed (20 files)
 pnpm --filter @workspace/leadsprint run test    12 passed
 pnpm --filter @workspace/api-server run build   ok
 PORT=5000 BASE_PATH=/ pnpm --filter @workspace/leadsprint run build   ok
