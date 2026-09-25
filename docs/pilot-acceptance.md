@@ -19,9 +19,11 @@ Four terminals (or the Arena process tools).
 pnpm --filter @workspace/scripts run dev-postgres
 # -> postgres://postgres:postgres@127.0.0.1:5433/postgres
 
-# 2. Apply the schema
+# 2. Apply the schema (the API also does this on boot; the app owns its
+#    migrations. Never `drizzle-kit push` a deployed database — it bypasses
+#    the journal and blocks every future migration.)
 DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5433/postgres" \
-  pnpm --filter @workspace/db run push --force
+  pnpm --filter @workspace/db run migrate
 
 # 3. Provider stub, stands in for Retell + Cal.com so nothing dials a real phone
 node scripts/src/provider-stub.mjs

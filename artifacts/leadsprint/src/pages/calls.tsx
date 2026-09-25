@@ -220,7 +220,8 @@ export default function CallsPage() {
                 </p>
                 {retryCall.isError && (
                   <p className="mt-2 text-xs text-[hsl(var(--destructive))]" data-testid="text-retry-error">
-                    The retry could not be started. It may be blocked by policy or by incomplete setup.
+                    {(retryCall.error as { data?: { error?: string } } | null)?.data?.error ??
+                      'The retry could not be started. It may be blocked by policy or by incomplete setup.'}
                   </p>
                 )}
               </div>

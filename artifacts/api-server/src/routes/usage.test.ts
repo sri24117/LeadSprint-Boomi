@@ -11,7 +11,14 @@ import express, { type Express } from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { activitiesTable, businessesTable, usageTable } from "@workspace/db/schema";
+import {
+  activitiesTable,
+  appointmentsTable,
+  businessesTable,
+  contactsTable,
+  leadsTable,
+  usageTable,
+} from "@workspace/db/schema";
 import { createTestDb, pilotBusiness, type TestDb } from "../test/testDb";
 import { currentPeriodBounds, periodLabel } from "../lib/usage";
 import leadsprintRouter, {
@@ -136,6 +143,71 @@ describe("GET /api/today", () => {
     const res = await request(buildApp()).get("/api/today");
     expect(res.status).toBe(200);
     expect(res.body.metrics.unresolved_messages).toBe(0);
+  });
+});
+
+describe("GET /api/today", () => {
+  it("counts only appointments inside the business's local day", async () => {
+    // 13:00 America/New_York on the frozen day these tests run in.
+    await db.insert(contactsTable).values({
+      id: "contact_today",
+      businessId: BUSINESS,
+      name: "Ava Williams",
+      phone: "+19175550184",
+      consentStatus: "valid",
+      consentSource: "web_form:listing-enquiry",
+      consentAt: new Date(),
+      timezone: "America/New_York",
+    });
+    await db.insert(leadsTable).values({
+      id: "lead_today",
+      businessId: BUSINESS,
+      contactId: "contact_today",
+      project: "Spring buyer campaign",
+      propertyType: "Condo",
+      budgetLabel: "$850k – $1.1M",
+      location: "Williamsburg",
+      timeline: "0–3 months",
+    });
+
+    const now = new Date();
+    const todayStart = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const nextMonth = new Date(now.getTime() + 30 * DAY_MS);
+
+    await db.insert(appointmentsTable).values([
+      {
+        id: "appointment_today",
+        businessId: BUSINESS,
+        contactId: "contact_today",
+        leadId: "lead_today",
+        serviceOrProperty: "Buyer consultation",
+        startTime: todayStart,
+        endTime: new Date(todayStart.getTime() + 30 * 60 * 1000),
+        timezone: "America/New_York",
+        externalId: "cal_today",
+        status: "confirmed",
+      },
+      {
+        id: "appointment_next_month",
+        businessId: BUSINESS,
+        contactId: "contact_today",
+        leadId: "lead_today",
+        serviceOrProperty: "Buyer consultation",
+        startTime: nextMonth,
+        endTime: new Date(nextMonth.getTime() + 30 * 60 * 1000),
+        timezone: "America/New_York",
+        externalId: "cal_next_month",
+        status: "confirmed",
+      },
+    ]);
+
+    const res = await request(buildApp()).get("/api/today");
+    expect(res.status).toBe(200);
+    // A booking for next month is not a booking today; the metric used to
+    // count every confirmed appointment ever made.
+    expect(res.body.metrics.appointments_today).toBe(1);
+    // The console still lists what is coming up.
+    expect(res.body.upcoming).toHaveLength(2);
   });
 });
 

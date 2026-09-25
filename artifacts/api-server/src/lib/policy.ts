@@ -94,6 +94,42 @@ export function isWithinQuietHours(
   return nowMinutes >= startMinutes || nowMinutes < endMinutes;
 }
 
+/**
+ * The instant the current quiet-hours block ends — i.e. when it becomes
+ * lawful to call this recipient again — or `now` when the window is already
+ * open.
+ *
+ * This exists because a retry that fires on a fixed timer cannot cross a
+ * night: a lead that arrives at 22:00 is blocked until 08:00, which is ten
+ * 30-minute worker ticks away, so a fixed-interval retry gives up long
+ * before the window opens and that enquiry is never called. Deferring to
+ * the opening of the window is what makes "retry a call blocked by quiet
+ * hours" mean something.
+ *
+ * Stepped rather than solved analytically so it stays correct across DST
+ * transitions and half-hour offsets: `isWithinQuietHours` is the single
+ * definition of "blocked", and this walks forward until it stops being
+ * true. Resolves to within `stepMs` of the real opening.
+ */
+export function nextAllowedCallTime(
+  quietHours: string | null | undefined,
+  timezone: string,
+  now: Date = new Date(),
+  stepMs = 5 * 60 * 1000,
+): Date {
+  if (!isWithinQuietHours(quietHours, timezone, now)) return now;
+  const limit = now.getTime() + 24 * 60 * 60 * 1000;
+  for (let t = now.getTime() + stepMs; t <= limit; t += stepMs) {
+    if (!isWithinQuietHours(quietHours, timezone, new Date(t))) {
+      // One minute past the boundary, so the retry cannot land a second
+      // before the window opens and read as still-blocked.
+      return new Date(t + 60 * 1000);
+    }
+  }
+  // A window that is 24h wide is a misconfiguration; block, don't guess.
+  return new Date(limit);
+}
+
 export function isKillSwitchEngaged(): boolean {
   const value = process.env["LEADSPRINT_KILL_SWITCH"]?.trim().toLowerCase();
   return value === "true" || value === "1" || value === "on";

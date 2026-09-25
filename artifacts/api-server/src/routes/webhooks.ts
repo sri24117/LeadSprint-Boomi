@@ -287,6 +287,13 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     return;
   }
   const eventType = typeof body.event === "string" ? body.event : "call_update";
+  // Read the call row BEFORE archiving the event, so the usage accrual
+  // below can tell "this is the first terminal report for this call" from
+  // "this is a duplicate report of the same call".
+  const [callBefore] = await db
+    .select()
+    .from(callsTable)
+    .where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
   const accepted = await acceptProviderEvent({ businessId, provider: "Retell", externalEventId: eventId(req, body), eventType, payload: body });
   if (accepted) {
     // Real Retell call_status values: registered | ongoing | ended | error.
@@ -307,7 +314,14 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
     const failedTransferReasons = ["dial_failed", "dial_no_answer", "dial_busy", "voicemail_reached", "transfer_failed"];
     const transferFailed = transferAttempted && !transferSucceeded && (disconnectionReason ? failedTransferReasons.includes(disconnectionReason) : true);
 
-    const [callRow] = await db.select().from(callsTable).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
+    // A duration is billed exactly once per call. Retell reports the same
+    // talk time on `call_ended` AND again on `call_analyzed`, and those two
+    // payloads differ, so provider-event dedupe (keyed on the event hash)
+    // cannot collapse them — accruing on every event that carried a
+    // duration billed every call twice. Only the first terminal report for
+    // a call we actually placed may write usage.
+    const firstReportedDuration =
+      terminal && duration != null && callBefore != null && callBefore.durationSeconds == null;
 
     await db.update(callsTable).set({
       status: terminal ? (status === "error" ? "failed" : "completed") : "in_progress",
@@ -322,13 +336,13 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
       errorState: status === "error" ? "Retell reported a failed call" : transferFailed ? "transfer_failed" : undefined,
     }).where(and(eq(callsTable.businessId, businessId), eq(callsTable.providerCallId, callId)));
 
-    if (duration != null) {
+    if (firstReportedDuration) {
       // Attributed to the current month's usage row (created on demand),
       // never spread across periods by a bare business-wide update.
       await recordVoiceUsage(db, businessId, duration / 60, VOICE_COST_PER_MINUTE);
     }
 
-    if (transferFailed && callRow) {
+    if (transferFailed && callBefore) {
       // Never expose the failure to the caller or silently drop it: log an
       // operator-visible activity and flip the lead to a manual follow-up
       // state so someone calls the person back.
@@ -342,7 +356,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
       await db.update(leadsTable).set({
         nextAction: "Call back — transfer to human did not connect",
         updatedAt: new Date(),
-      }).where(and(eq(leadsTable.id, callRow.leadId), eq(leadsTable.businessId, businessId)));
+      }).where(and(eq(leadsTable.id, callBefore.leadId), eq(leadsTable.businessId, businessId)));
     }
   }
   res.status(202).json({ accepted: true, duplicate: !accepted });

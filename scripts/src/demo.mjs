@@ -5,7 +5,7 @@
  * real phone calls:
  *
  *   1. Embedded PostgreSQL (PGlite behind a real TCP wire socket)
- *   2. Schema push
+ *   2. Schema migrations
  *   3. Provider stubs standing in for Retell + Cal.com
  *   4. Production builds of the API server and operator console
  *   5. The API serving the console, seeded with the demo workspace,
@@ -172,8 +172,12 @@ async function main() {
   await waitForPort(PG_PORT, "embedded PostgreSQL");
   log("postgres", "ready");
 
-  log("schema", "pushing schema (drizzle-kit) …");
-  await pnpm(["--filter", "@workspace/db", "run", "push"], { DATABASE_URL });
+  // Migrations, not `drizzle-kit push`. Push bypasses Drizzle's journal,
+  // so the API's own boot migrator would see a migration-naive database,
+  // replay 0000, fail, and — before this fix — swallow the error. Any
+  // migration added later would then never reach this database.
+  log("schema", "applying migrations (drizzle-kit migrate) …");
+  await pnpm(["--filter", "@workspace/db", "run", "migrate"], { DATABASE_URL });
   log("schema", "applied");
 
   log("stubs", `starting Retell/Cal.com provider stubs on 127.0.0.1:${STUB_PORT} …`);

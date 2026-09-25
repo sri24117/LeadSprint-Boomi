@@ -34,7 +34,7 @@ import {
   leadsTable,
   workflowJobsTable,
 } from "@workspace/db";
-import { evaluateCallPolicy } from "./policy";
+import { evaluateCallPolicy, nextAllowedCallTime } from "./policy";
 import { hasRetellConfigForMarket, startRetellCall } from "./providers";
 import { liveCallingBlockedReason } from "./onboarding";
 import { logger } from "./logger";
@@ -164,6 +164,19 @@ export type DispatchOutcome =
   | "provider_uncertain"
   | "already_handled";
 
+/**
+ * Reasons that a retry can actually clear.
+ *
+ * Quiet hours pass with the clock, and a half-configured workspace is a
+ * deployment being finished. Everything else — no consent, suppressed,
+ * unknown location, attempt budget exhausted, kill switch — is a decision,
+ * not a delay, and re-dispatching it would either place a call that must
+ * not happen or burn an attempt to prove the same answer.
+ */
+export function isRetryableBlock(reason: string | undefined): boolean {
+  return reason === "quiet_hours";
+}
+
 export interface DispatchResult {
   outcome: DispatchOutcome;
   call?: typeof callsTable.$inferSelect;
@@ -173,6 +186,8 @@ export interface DispatchResult {
   policyReason?: string;
   /** True when it is worth trying this call again later. */
   retryable?: boolean;
+  /** For a time-based block: the instant at which the retry may be made. */
+  retryAt?: Date;
 }
 
 /**
@@ -193,12 +208,43 @@ export async function dispatchQueuedCall(input: {
   if (!call) {
     return { outcome: "already_handled", message: "Call not found." };
   }
-  if (call.status !== "queued") {
-    return {
-      outcome: "already_handled",
-      call,
-      message: `Call is already ${call.status}; not dialing again.`,
-    };
+  // A call can be re-dispatched only if it is still queued, or if it was
+  // blocked for a reason that time itself clears. Without the second case
+  // the retry queue was decorative: a call blocked by quiet hours is
+  // written as `policy_blocked`, and every later dispatch of that same row
+  // returned `already_handled` — so the worker marked the retry job
+  // completed and an enquiry that arrived in the evening was never called
+  // at all. The block stays visible on the row; the row is simply eligible
+  // again once the window it hit has passed.
+  let attempt = call;
+  if (attempt.status !== "queued") {
+    if (!(attempt.status === "policy_blocked" && isRetryableBlock(attempt.errorState ?? undefined))) {
+      return {
+        outcome: "already_handled",
+        call: attempt,
+        message: `Call is already ${attempt.status}; not dialing again.`,
+      };
+    }
+    const [reopened] = await db
+      .update(callsTable)
+      .set({ status: "queued" })
+      .where(
+        and(
+          eq(callsTable.id, attempt.id),
+          eq(callsTable.businessId, businessId),
+          eq(callsTable.status, "policy_blocked"),
+        ),
+      )
+      .returning();
+    if (!reopened) {
+      // Someone else re-opened or finished it between the read and here.
+      return {
+        outcome: "already_handled",
+        call: attempt,
+        message: "Another worker is already handling this call.",
+      };
+    }
+    attempt = reopened;
   }
 
   const [business] = await db
@@ -212,7 +258,7 @@ export async function dispatchQueuedCall(input: {
   if (setupBlocked) {
     return {
       outcome: "setup_incomplete",
-      call,
+      call: attempt,
       message: setupBlocked,
       retryable: true,
     };
@@ -221,7 +267,7 @@ export async function dispatchQueuedCall(input: {
   if (!hasRetellConfigForMarket(market)) {
     return {
       outcome: "provider_not_configured",
-      call,
+      call: attempt,
       message: `Retell is not configured for the ${market} market.`,
       retryable: true,
     };
@@ -230,7 +276,7 @@ export async function dispatchQueuedCall(input: {
   const [contact] = await db
     .select()
     .from(contactsTable)
-    .where(eq(contactsTable.id, call.contactId));
+    .where(eq(contactsTable.id, attempt.contactId));
 
   // Prior attempts = other non-blocked calls for this lead. A
   // policy-blocked row is not an attempt to reach anybody, so it must not
@@ -242,8 +288,8 @@ export async function dispatchQueuedCall(input: {
       .where(
         and(
           eq(callsTable.businessId, businessId),
-          eq(callsTable.leadId, call.leadId),
-          ne(callsTable.id, call.id),
+          eq(callsTable.leadId, attempt.leadId),
+          ne(callsTable.id, attempt.id),
           sql`${callsTable.status} != 'policy_blocked'`,
         ),
       )
@@ -274,7 +320,7 @@ export async function dispatchQueuedCall(input: {
         summary: decision.message ?? "Blocked by call policy.",
         errorState: decision.reason ?? "policy_blocked",
       })
-      .where(and(eq(callsTable.id, call.id), eq(callsTable.businessId, businessId)))
+      .where(and(eq(callsTable.id, attempt.id), eq(callsTable.businessId, businessId)))
       .returning();
     await db.insert(activitiesTable).values({
       id: id("activity"),
@@ -285,38 +331,78 @@ export async function dispatchQueuedCall(input: {
     });
     return {
       outcome: "policy_blocked",
-      call: blocked ?? call,
+      call: blocked ?? attempt,
       message: decision.message,
       policyReason: decision.reason,
       // Quiet hours resolve themselves with time; nothing else does.
-      retryable: decision.reason === "quiet_hours",
+      retryable: isRetryableBlock(decision.reason),
+      // And this is when: the opening of the next allowed window. A retry
+      // on a fixed timer cannot cross a night, so without this a lead who
+      // enquired at 22:00 was never called at all.
+      retryAt:
+        decision.reason === "quiet_hours"
+          ? nextAllowedCallTime(business?.quietHours, contact?.timezone ?? "", new Date())
+          : undefined,
     };
   }
 
-  // Gate 3 — provider. From here on, a failure is "uncertain", never
-  // "didn't happen": Retell may have accepted the call even if we never
-  // saw the response.
+  // Gate 3 — claim the attempt atomically, then dial.
+  //
+  // Everything above is a read followed by a decision, which is safe to
+  // repeat. This is not: the provider request places a real phone call.
+  // Two dispatching workers (the internal scheduler and an external cron,
+  // or two replicas during a rolling deploy) can both get this far for the
+  // same queued call, and the plain `status !== "queued"` check at the top
+  // cannot stop them, because both read the row before either writes it.
+  //
+  // A conditional UPDATE is the mutual exclusion: exactly one caller can
+  // move the row out of `queued`, and only that caller may dial. The
+  // loser reports `already_handled` rather than placing a second call.
+  const [claimed] = await db
+    .update(callsTable)
+    .set({ status: "in_progress", startedAt: new Date() })
+    .where(
+      and(
+        eq(callsTable.id, attempt.id),
+        eq(callsTable.businessId, businessId),
+        eq(callsTable.status, "queued"),
+      ),
+    )
+    .returning();
+
+  if (!claimed) {
+    const [current] = await db
+      .select()
+      .from(callsTable)
+      .where(and(eq(callsTable.id, attempt.id), eq(callsTable.businessId, businessId)));
+    return {
+      outcome: "already_handled",
+      call: current ?? call,
+      message: `Another worker already started this call (${current?.status ?? "handled"}); not dialing again.`,
+    };
+  }
+
+  // From here on, a failure is "uncertain", never "didn't happen": Retell
+  // may have accepted the call even if we never saw the response.
   try {
     const live = await startRetellCall({
       toNumber: contact?.phone ?? "",
       market,
       metadata: {
         business_id: businessId,
-        lead_id: call.leadId,
-        call_id: call.id,
+        lead_id: attempt.leadId,
+        call_id: attempt.id,
       },
     });
     const [started] = await db
       .update(callsTable)
       .set({
         providerCallId: live.callId,
-        status: "in_progress",
-        startedAt: new Date(),
         outcome: "Live call started with Retell",
         summary:
           "Retell accepted the call and will report the final outcome by webhook.",
       })
-      .where(and(eq(callsTable.id, call.id), eq(callsTable.businessId, businessId)))
+      .where(and(eq(callsTable.id, attempt.id), eq(callsTable.businessId, businessId)))
       .returning();
     await db.insert(activitiesTable).values({
       id: id("activity"),
@@ -325,10 +411,10 @@ export async function dispatchQueuedCall(input: {
       title: "Qualification call started",
       detail: "Retell accepted the call · awaiting the signed callback.",
     });
-    return { outcome: "started", call: started ?? call };
+    return { outcome: "started", call: started ?? claimed };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Retell request failed";
-    logger.error({ callId: call.id, businessId, err: message }, "Retell call start failed");
+    logger.error({ callId: attempt.id, businessId, err: message }, "Retell call start failed");
     const [uncertain] = await db
       .update(callsTable)
       .set({
@@ -338,11 +424,11 @@ export async function dispatchQueuedCall(input: {
         summary:
           "The call request could not be confirmed. Reconcile against the provider before retrying.",
       })
-      .where(and(eq(callsTable.id, call.id), eq(callsTable.businessId, businessId)))
+      .where(and(eq(callsTable.id, attempt.id), eq(callsTable.businessId, businessId)))
       .returning();
     return {
       outcome: "provider_uncertain",
-      call: uncertain ?? call,
+      call: uncertain ?? claimed,
       message,
       retryable: true,
     };

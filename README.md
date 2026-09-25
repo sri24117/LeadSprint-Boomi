@@ -37,7 +37,7 @@ talking points, and live-phone-call setup), see
 ```bash
 corepack enable
 pnpm install
-pnpm --filter @workspace/db run push        # push schema to DATABASE_URL
+pnpm --filter @workspace/db run migrate     # apply lib/db/drizzle migrations
 pnpm --filter @workspace/api-server run dev  # API on the port you set
 pnpm --filter @workspace/leadsprint run dev  # frontend Vite dev server (port 5173; proxies /api to 127.0.0.1:5000)
 ```
@@ -84,13 +84,35 @@ deploy sheet PDF.
 
 ### Database
 
-Run the schema push once against your production `DATABASE_URL` before
-first deploy (from a machine that can reach it, or as a Coolify one-off
-command):
+The API applies its own migrations (`lib/db/drizzle`) on boot, so a normal
+deploy needs no separate step. To pre-provision from a machine that can
+reach the database — or as a Coolify one-off command — run the same
+migrator explicitly:
 
 ```bash
-pnpm --filter @workspace/db run push
+pnpm --filter @workspace/db run migrate
 ```
+
+Do **not** use `drizzle-kit push` on a deployed database. `push` bypasses
+Drizzle's migration journal, so the app's boot migrator sees a
+migration-naive database, tries to replay `0000`, fails, and every later
+migration is silently blocked from ever applying. `migrate` and the
+migrator the app runs on boot share the same journal and are safe to run
+in any order or repeatedly.
+
+Already have a database that was created with `push`? Start the app once
+and it adopts it — it verifies every expected table is present, records the
+existing migrations as applied, and logs:
+
+```
+[db] This database already had the schema but no migration history
+     (provisioned outside the migrator, e.g. `drizzle-kit push`).
+     Recorded 1 existing migration(s) as applied so future migrations can run.
+```
+
+(`pnpm --filter @workspace/db run migrate` will still fail on such a
+database with `relation "activities" already exists` — it is the raw
+Drizzle CLI, with no adoption step. The app is the thing that adopts it.)
 
 ### Scheduled jobs
 
@@ -100,7 +122,7 @@ or any cron), authenticated with the `CRON_SECRET` env var via the
 
 | Endpoint | Suggested schedule | What it does |
 |---|---|---|
-| `POST /api/cron/process-jobs` | every 5–10 min | Retries calls that were queued while Retell wasn't configured, or blocked by quiet hours, re-checking the safety policy each time. |
+| `POST /api/cron/process-jobs` | every 5–10 min | Retries calls that were queued while Retell wasn't configured, or blocked by quiet hours — a quiet-hours retry is scheduled for the opening of the next allowed calling window, so an enquiry that arrives overnight is called in the morning. Each job is claimed atomically, so this endpoint and `ENABLE_INTERNAL_WORKER` can run side by side without dialing twice. The safety policy is re-checked on every attempt. |
 | `POST /api/cron/weekly-report` | weekly | Emails each business owner their weekly numbers (no-ops per business if SMTP isn't configured). |
 | `POST /api/cron/retention` | daily | Prunes raw provider-event payloads and stale activity rows past `RETENTION_DAYS`. Never touches leads, calls, contacts, or appointments. |
 
