@@ -418,8 +418,19 @@ pilot, and self-serve — deliberately separate.
 
 ## 6. Fix pass — 2026-09-25
 
-Everything below is on `arena/01a0d975-leadsprint-boomi` (uncommitted at the time of writing),
-verified with the repo's own pipeline plus the same live checks that exposed the defects.
+Everything below landed on `main` as `3b35048` (PR #12, squashed), verified with the repo's
+own pipeline — all four workspaces typecheck, 175 API tests and 12 console tests pass, both
+GitHub Actions jobs are green on `main` — plus the same live checks that exposed the defects.
+
+One finding changes the picture recorded in §2: making the schema path single and fail-closed
+created a way to brick a deployment. A database that already had the schema but no migration
+journal — created with `drizzle-kit push`, which the README used to recommend — could not boot
+at all once migration replay started failing loudly, and because Drizzle runs a migration in a
+single transaction, every future migration was blocked behind it. Reproduced against a real
+push-created database: exit code 1, container down for good. The boot now adopts such a
+database — verifying every expected table is present, then recording the existing migrations
+with Drizzle's own hashes — while a partial schema still refuses to start. See the adoption row
+below.
 
 ### Diffs
 
