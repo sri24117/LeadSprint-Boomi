@@ -145,25 +145,32 @@ function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
 }
 
 async function ensureSeedData(): Promise<void> {
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
-  if (business) return;
+  let [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
+  if (!business) {
+    await db.insert(businessesTable).values({
+      id: BUSINESS_ID,
+      name: "Northstar Realty",
+      market: "US",
+      timezone: "America/New_York",
+      phoneNumber: "+1 (212) 555-0148",
+      transferNumber: "+1 (212) 555-0199",
+      projectName: "Northstar Realty — Spring buyer campaign",
+      servicesOrPropertyTypes: ["Condos", "Townhomes", "Single-family homes"],
+      approvedFaq: "Northstar Realty helps buyers and renters find homes in Manhattan and Brooklyn. Share only configured project information, then offer a human handoff.",
+      qualificationQuestions: ["What area are you looking in?", "What is your target budget?", "When are you hoping to move?", "Would you like to schedule a showing?"],
+      escalationRules: "Do not answer legal, lending, appraisal, fair-housing, or availability questions outside approved information. Transfer or take a message.",
+      calEventTypeId: "cal_demo_showing",
+      retellAgentId: "retell_demo_agent",
+    }).onConflictDoNothing();
+  }
 
-  await db.insert(businessesTable).values({
-    id: BUSINESS_ID,
-    name: "Northstar Realty",
-    market: "US",
-    timezone: "America/New_York",
-    phoneNumber: "+1 (212) 555-0148",
-    transferNumber: "+1 (212) 555-0199",
-    projectName: "Northstar Realty — Spring buyer campaign",
-    servicesOrPropertyTypes: ["Condos", "Townhomes", "Single-family homes"],
-    approvedFaq: "Northstar Realty helps buyers and renters find homes in Manhattan and Brooklyn. Share only configured project information, then offer a human handoff.",
-    qualificationQuestions: ["What area are you looking in?", "What is your target budget?", "When are you hoping to move?", "Would you like to schedule a showing?"],
-    escalationRules: "Do not answer legal, lending, appraisal, fair-housing, or availability questions outside approved information. Transfer or take a message.",
-    calEventTypeId: "cal_demo_showing",
-    retellAgentId: "retell_demo_agent",
-  });
-  await db.insert(usersTable).values({ id: USER_ID, businessId: BUSINESS_ID, name: "Maya Patel", email: "maya@northstarrealty.example", role: "owner" });
+  let [user] = await db.select().from(usersTable).where(eq(usersTable.id, USER_ID));
+  if (!user) {
+    await db.insert(usersTable).values({ id: USER_ID, businessId: BUSINESS_ID, name: "Maya Patel", email: "maya@northstarrealty.example", role: "owner" }).onConflictDoNothing();
+  }
+
+  const existingLeads = await db.select({ id: leadsTable.id }).from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID)).limit(1);
+  if (existingLeads.length > 0) return;
 
   const seed = [
     { id: "contact_ava", name: "Ava Williams", phone: "+1 917 555 0184", email: "ava.williams@example.com", preferredLanguage: "en", propertyType: "Condo", budgetLabel: "$850k – $1.1M", location: "Williamsburg", timeline: "0–3 months", score: "hot", intentScore: 92, status: "new", nextAction: "Call within 15 minutes", source: "Zillow", campaign: "Spring buyer campaign" },
@@ -181,13 +188,10 @@ async function ensureSeedData(): Promise<void> {
       email: item.email,
       preferredLanguage: item.preferredLanguage,
       timezone: timezoneForUSPhoneNumber(item.phone),
-      // Seeded demo contacts carry explicit (fictional) consent evidence so
-      // the demo exercises the same gate a real pilot does, rather than
-      // relying on a permissive default.
       consentStatus: "valid",
       consentSource: `demo_seed:${item.source.toLowerCase()} enquiry form`,
       consentAt: new Date(),
-    });
+    }).onConflictDoNothing();
     await db.insert(leadsTable).values({
       id: id("lead"),
       businessId: BUSINESS_ID,
@@ -204,7 +208,7 @@ async function ensureSeedData(): Promise<void> {
       score: item.score,
       status: item.status,
       nextAction: item.nextAction,
-    });
+    }).onConflictDoNothing();
   }
 
   const seededLeads = await db.select().from(leadsTable).where(eq(leadsTable.businessId, BUSINESS_ID)).orderBy(leadsTable.createdAt);
@@ -227,7 +231,7 @@ async function ensureSeedData(): Promise<void> {
       outcome: "Qualified — showing requested",
       transferred: true,
       booked: false,
-    });
+    }).onConflictDoNothing();
     await db.insert(callsTable).values({
       id: "call_rohan_active",
       businessId: BUSINESS_ID,
@@ -239,7 +243,7 @@ async function ensureSeedData(): Promise<void> {
       startedAt: new Date(now.getTime() - 2 * 60 * 1000),
       summary: "Live qualification call in progress.",
       outcome: "In progress",
-    });
+    }).onConflictDoNothing();
     await db.insert(appointmentsTable).values({
       id: "appointment_priya",
       businessId: BUSINESS_ID,
@@ -250,13 +254,13 @@ async function ensureSeedData(): Promise<void> {
       endTime: new Date(now.getTime() + 2.5 * 60 * 60 * 1000),
       timezone: "America/New_York",
       externalId: "cal_booking_priya",
-    });
+    }).onConflictDoNothing();
   }
   await db.insert(activitiesTable).values([
     { id: "activity_import", businessId: BUSINESS_ID, type: "import", title: "4 leads imported", detail: "Spring buyer campaign · Zillow + website", createdAt: new Date(now.getTime() - 45 * 60 * 1000) },
     { id: "activity_call", businessId: BUSINESS_ID, type: "call", title: "Ava Williams qualified", detail: "Showing interest captured by Retell", createdAt: new Date(now.getTime() - 32 * 60 * 1000) },
     { id: "activity_booking", businessId: BUSINESS_ID, type: "booking", title: "Buyer consultation booked", detail: "Today at 4:00 PM · Cal.com verified", createdAt: new Date(now.getTime() - 20 * 60 * 1000) },
-  ]);
+  ]).onConflictDoNothing();
   await db.insert(usageTable).values({
     id: "usage_demo",
     businessId: BUSINESS_ID,
@@ -266,7 +270,7 @@ async function ensureSeedData(): Promise<void> {
     smsCount: 0,
     bookingCount: 1,
     estimatedCost: "4.76",
-  });
+  }).onConflictDoNothing();
 }
 
 // Fire-and-forget at boot so the demo workspace exists before the first
@@ -336,11 +340,26 @@ async function getCallDto(row: typeof callsTable.$inferSelect) {
 }
 
 router.get("/auth/me", async (_req, res): Promise<void> => {
-  if (demoSeedEnabled()) await ensureSeedData();
   const req = _req;
   const businessId = scopedBusinessId(req);
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
-  const business = await getBusiness(businessId);
+  if (demoSeedEnabled() || businessId === BUSINESS_ID) {
+    try {
+      await ensureSeedData();
+    } catch (err) {
+      logger.error({ err }, "Failed to ensure seed data in /auth/me");
+    }
+  }
+  let [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
+  let business = await getBusiness(businessId);
+  if ((!user || !business) && businessId === BUSINESS_ID) {
+    try {
+      await ensureSeedData();
+      [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.leadSprintUserId ?? USER_ID));
+      business = await getBusiness(businessId);
+    } catch (err) {
+      logger.error({ err }, "Retry ensure seed data in /auth/me failed");
+    }
+  }
   if (!user || !business) { res.status(503).json({ error: "Operator setup is not ready" }); return; }
   res.json(GetAuthMeResponse.parse({
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
