@@ -28,6 +28,10 @@ RUN pnpm install --no-frozen-lockfile
 
 # ---- typecheck + build --------------------------------------------------
 FROM deps AS build
+ARG VITE_LEADSPRINT_DEMO_AUTH=true
+ARG VITE_CLERK_PUBLISHABLE_KEY=""
+ENV VITE_LEADSPRINT_DEMO_AUTH=${VITE_LEADSPRINT_DEMO_AUTH}
+ENV VITE_CLERK_PUBLISHABLE_KEY=${VITE_CLERK_PUBLISHABLE_KEY}
 ENV NODE_ENV=production
 # Required at Vite config-load time for the operator console build.
 # BASE_PATH=/ means assets are served from the app root, which matches

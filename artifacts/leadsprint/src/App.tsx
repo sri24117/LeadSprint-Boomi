@@ -58,14 +58,16 @@ const pageMeta: Record<string, { eyebrow: string; title: string; description: st
 // LEADSPRINT_DEMO_AUTH=true / NODE_ENV != production), the console skips
 // Clerk entirely and talks to the seeded demo workspace. Never build a
 // public deployment with this flag set — it removes sign-in completely.
-const DEMO_AUTH = import.meta.env.VITE_LEADSPRINT_DEMO_AUTH === 'true';
+const rawClerkKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim();
+const clerkPubKey = rawClerkKey
+  ? publishableKeyFromHost(window.location.hostname, rawClerkKey)
+  : '';
 
-const clerkPubKey = DEMO_AUTH
-  ? ''
-  : publishableKeyFromHost(
-      window.location.hostname,
-      import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-    );
+// Local development / single-box pilot shortcut: when the build is made with
+// VITE_LEADSPRINT_DEMO_AUTH=true or when CLERK_PUBLISHABLE_KEY is not configured,
+// the console loads directly in demo mode instead of hanging on an empty Clerk skeleton.
+const DEMO_AUTH =
+  import.meta.env.VITE_LEADSPRINT_DEMO_AUTH === 'true' || !clerkPubKey;
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
