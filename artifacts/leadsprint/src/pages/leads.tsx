@@ -105,6 +105,19 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
           setMessage('Call queued. Watch Calls for the provider handoff.');
           queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
         },
+        // A blocked attempt comes back as 409 with the reason. Saying
+        // nothing here would leave the operator clicking a button that
+        // appears to do nothing; saying "queued" would be a lie.
+        onError: (error) => {
+          // ApiError carries the parsed JSON body on `.data`; the API puts
+          // the operator-readable reason in `error`.
+          const detail =
+            (error as { data?: { error?: string }; message?: string })?.data?.error ||
+            (error as { message?: string })?.message ||
+            'The call could not be started.';
+          setMessage(detail);
+          queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
+        },
       },
     );
 

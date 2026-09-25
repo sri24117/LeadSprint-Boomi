@@ -66,7 +66,11 @@ import {
   buildOnboardingChecklist,
   liveCallingBlockedReason,
 } from "../lib/onboarding";
-import { dispatchQueuedCall, enqueueCallForLead } from "../lib/callQueue";
+import {
+  dispatchQueuedCall,
+  enqueueCallForLead,
+  isRetryableBlock,
+} from "../lib/callQueue";
 import { getCurrentUsageRow, periodLabel, VOICE_COST_PER_MINUTE } from "../lib/usage";
 import {
   AvailabilityError,
@@ -504,10 +508,21 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   // (lib/callQueue.ts): enqueue idempotently, then dispatch — with the
   // safety policy gate re-evaluated immediately before the provider
   // request.
+  //
+  // The idempotency key identifies "an operator's call attempt for this
+  // lead", bucketed to the minute: two clicks (or a flaky-network retry)
+  // inside the same minute collapse onto one call row, while a genuine
+  // retry a minute later is a new attempt and really does re-dispatch.
+  //
+  // The key must not be permanent. It used to be `console_<leadId>` for
+  // the life of the lead, so once the first attempt ended `policy_blocked`
+  // — quiet hours, most commonly — every later click resolved to that same
+  // blocked row, no dispatch ran, and the route still answered 201. The
+  // operator was told a call had gone out when nothing had.
   const queued = await enqueueCallForLead({
     businessId: BUSINESS_ID,
     leadId: body.data.lead_id,
-    idempotencyKey: `console_${body.data.lead_id}`,
+    idempotencyKey: `console_${body.data.lead_id}_${Math.floor(Date.now() / 60_000)}`,
     source: "console",
   });
   if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
@@ -515,12 +530,19 @@ router.post("/calls/start", async (req, res): Promise<void> => {
   const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
   const current = dispatch.call ?? queued.call;
 
-  if (dispatch.outcome === "policy_blocked") {
-    res.status(409).json(StartCallResponse.parse(await getCallDto(current)));
-    return;
-  }
   if (dispatch.outcome === "setup_incomplete") {
     res.status(409).json({ error: dispatch.message, code: "SETUP_INCOMPLETE" });
+    return;
+  }
+  // Only a call the provider actually accepted is a success. Everything
+  // else — blocked, uncertain, not configured — is reported as an error so
+  // the console can never tell an operator a call went out when it did not.
+  if (dispatch.outcome !== "started") {
+    res.status(409).json({
+      ...StartCallResponse.parse(await getCallDto(current)),
+      outcome_detail: dispatch.outcome,
+      error: dispatch.message ?? "The call could not be started.",
+    });
     return;
   }
   res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
@@ -541,6 +563,17 @@ router.post("/calls/:id/retry", async (req, res): Promise<void> => {
     res.status(409).json({ error: `Only uncertain, failed or policy-blocked calls can be retried; this one is ${row.status}.` });
     return;
   }
+  // A blocked call is only worth retrying if the block can clear. Consent,
+  // suppression, an unknown location, the attempt budget and the kill
+  // switch are decisions — re-dispatching them places a call that must not
+  // happen, or burns an attempt to prove the same answer.
+  if (row.status === "policy_blocked" && !isRetryableBlock(row.errorState ?? undefined)) {
+    res.status(409).json({
+      error: `This call was blocked by ${row.errorState ?? "policy"} — that is a decision, not a delay. Resolve it (record consent, clear suppression, raise the attempt limit) before retrying.`,
+      code: "POLICY_NOT_RETRYABLE",
+    });
+    return;
+  }
 
   const queued = await enqueueCallForLead({
     businessId: BUSINESS_ID,
@@ -551,7 +584,15 @@ router.post("/calls/:id/retry", async (req, res): Promise<void> => {
   if (!queued) { res.status(404).json({ error: "Lead not found" }); return; }
   const dispatch = await dispatchQueuedCall({ businessId: BUSINESS_ID, callId: queued.call.id });
   const current = dispatch.call ?? queued.call;
-  res.status(dispatch.outcome === "started" ? 201 : 409).json(StartCallResponse.parse(await getCallDto(current)));
+  if (dispatch.outcome !== "started") {
+    res.status(409).json({
+      ...StartCallResponse.parse(await getCallDto(current)),
+      outcome_detail: dispatch.outcome,
+      error: dispatch.message ?? "The retry could not be started.",
+    });
+    return;
+  }
+  res.status(201).json(StartCallResponse.parse(await getCallDto(current)));
 });
 
 router.get("/appointments", async (_req, res): Promise<void> => {
@@ -670,11 +711,33 @@ router.get("/today", async (_req, res): Promise<void> => {
     .from(callsTable)
     .where(eq(callsTable.businessId, BUSINESS_ID));
 
-  const appointments = await db
-    .select()
-    .from(appointmentsTable)
-    .where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")))
-    .orderBy(appointmentsTable.startTime);
+  // "Today" means the business's own calendar day, not the last 24 hours
+  // and not all of history: the metric below counts only appointments
+  // starting inside it, so a booking for next month cannot show up as a
+  // booking today.
+  const dayLabel = new Intl.DateTimeFormat("en-CA", {
+    timeZone: business?.timezone ?? "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const [todayAppointments, appointments] = await Promise.all([
+    db
+      .select({ id: appointmentsTable.id })
+      .from(appointmentsTable)
+      .where(
+        and(
+          eq(appointmentsTable.businessId, BUSINESS_ID),
+          eq(appointmentsTable.status, "confirmed"),
+          sql`to_char(${appointmentsTable.startTime} AT TIME ZONE ${business?.timezone ?? "UTC"}, 'YYYY-MM-DD') = ${dayLabel}`,
+        ),
+      ),
+    db
+      .select()
+      .from(appointmentsTable)
+      .where(and(eq(appointmentsTable.businessId, BUSINESS_ID), eq(appointmentsTable.status, "confirmed")))
+      .orderBy(appointmentsTable.startTime),
+  ]);
 
   const activities = await db
     .select()
@@ -710,7 +773,7 @@ router.get("/today", async (_req, res): Promise<void> => {
       new_leads: leadMetrics?.newLeads ?? 0,
       calls_in_progress: callMetrics?.callsInProgress ?? 0,
       hot_leads: leadMetrics?.hotLeads ?? 0,
-      appointments_today: appointments.length,
+      appointments_today: todayAppointments.length,
       failed_calls: callMetrics?.failedCalls ?? 0,
       unresolved_messages: recentMessages?.count ?? 0,
     },

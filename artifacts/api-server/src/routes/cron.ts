@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Router, type IRouter } from "express";
-import { and, asc, eq, lte, lt, ne } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import {
   activitiesTable,
   appointmentsTable,
@@ -11,9 +11,8 @@ import {
   leadsTable,
   providerEventsTable,
   usersTable,
-  workflowJobsTable,
 } from "@workspace/db";
-import { dispatchQueuedCall } from "../lib/callQueue";
+import { processQueuedJobs } from "../lib/scheduler";
 import { sendWeeklyReportEmail } from "../lib/mailer";
 import { getCurrentUsageRow } from "../lib/usage";
 import { createCronLimiter } from "../middlewares/rateLimit";
@@ -94,87 +93,12 @@ router.post("/cron/process-jobs", async (req, res): Promise<void> => {
     return;
   }
 
-  const MAX_JOB_ATTEMPTS = 5;
-  const now = new Date();
-  const jobs = await db
-    .select()
-    .from(workflowJobsTable)
-    .where(and(eq(workflowJobsTable.type, "initiate_call"), eq(workflowJobsTable.status, "queued"), lte(workflowJobsTable.availableAt, now)))
-    .orderBy(asc(workflowJobsTable.availableAt))
-    .limit(25);
-
-  let started = 0;
-  let blocked = 0;
-  let deferred = 0;
-  let failed = 0;
-  let alreadyHandled = 0;
-
-  for (const job of jobs) {
-    // The job's idempotency key IS the stable key shared with the call it was
-    // created for (see lib/callQueue.ts). Look up the call by that key, then
-    // dispatch. One shared dispatcher runs the setup gate, the full safety
-    // policy gate, and the provider request — a job being old never bypasses
-    // any of them.
-    const [call] = await db
-      .select()
-      .from(callsTable)
-      .where(and(eq(callsTable.businessId, job.businessId), eq(callsTable.idempotencyKey, job.idempotencyKey)))
-      .limit(1);
-    if (!call) {
-      // No call row found for this idempotency key — mark job failed and continue.
-      await db
-        .update(workflowJobsTable)
-        .set({ status: "failed", attempts: job.attempts + 1, lastError: "Call row not found for idempotency key" })
-        .where(eq(workflowJobsTable.id, job.id));
-      failed += 1;
-      continue;
-    }
-    const result = await dispatchQueuedCall({ businessId: job.businessId, callId: call.id });
-    const nextAttempts = job.attempts + 1;
-
-    switch (result.outcome) {
-      case "started":
-        started += 1;
-        await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-        break;
-
-      case "already_handled":
-        alreadyHandled += 1;
-        await db.update(workflowJobsTable).set({ status: "completed" }).where(eq(workflowJobsTable.id, job.id));
-        break;
-
-      case "setup_incomplete":
-      case "provider_not_configured":
-        // Not the lead's fault and not a wasted attempt — leave the job
-        // queued so the backlog drains by itself once the workspace is
-        // finished being configured.
-        deferred += 1;
-        await db.update(workflowJobsTable).set({ availableAt: new Date(now.getTime() + 15 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
-        break;
-
-      case "policy_blocked":
-        blocked += 1;
-        if (result.retryable && nextAttempts < MAX_JOB_ATTEMPTS) {
-          // Quiet hours resolve themselves with time — worth another look.
-          await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 30 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
-        } else {
-          await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
-        }
-        break;
-
-      case "provider_uncertain":
-      default:
-        failed += 1;
-        if (nextAttempts < MAX_JOB_ATTEMPTS) {
-          await db.update(workflowJobsTable).set({ attempts: nextAttempts, availableAt: new Date(now.getTime() + 10 * 60 * 1000), lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
-        } else {
-          await db.update(workflowJobsTable).set({ status: "failed", attempts: nextAttempts, lastError: result.message }).where(eq(workflowJobsTable.id, job.id));
-        }
-        break;
-    }
-  }
-
-  res.json({ jobs_seen: jobs.length, started, blocked, deferred, failed, already_handled: alreadyHandled });
+  // One implementation, shared with the in-process scheduler
+  // (lib/scheduler.ts). It claims each job before working it, so running
+  // both this endpoint and ENABLE_INTERNAL_WORKER=true at the same time —
+  // or two replicas behind a load balancer — cannot dispatch one job twice.
+  const summary = await processQueuedJobs(db);
+  res.json(summary);
 });
 
 /**

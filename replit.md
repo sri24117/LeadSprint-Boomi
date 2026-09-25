@@ -8,7 +8,7 @@ LeadSprint is an operator console for real-estate teams to turn new enquiries in
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/db run migrate` — apply DB migrations (dev and production)
 - Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack

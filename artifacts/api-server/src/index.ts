@@ -23,7 +23,20 @@ async function start() {
     await runMigrations();
     logger.info("Database schema up to date");
   } catch (err) {
-    logger.error({ err }, "Database migration could not be completed on boot");
+    // Boot used to log this and carry on listening, which meant a bad
+    // DATABASE_URL produced a container that reported healthy (GET
+    // /healthz touches nothing) while every real request failed — and a
+    // schema that could not be created stayed invisible until a customer
+    // hit a missing table. A process that cannot reach its schema is not
+    // ready to serve webhooks that place phone calls: refuse to start, and
+    // let the platform restart or roll back.
+    logger.error(
+      { err },
+      "Database schema could not be verified — refusing to start the API. " +
+        "The app owns its schema via the Drizzle migrations in lib/db/drizzle; " +
+        "check DATABASE_URL and that migrations can be applied.",
+    );
+    process.exit(1);
   }
 
   const server = app.listen(port, (err) => {

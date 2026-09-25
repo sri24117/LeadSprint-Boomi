@@ -160,15 +160,61 @@ export class InternalWorkerScheduler {
   }
 }
 
+/**
+ * Time a claimed job may stay in `dispatching` before it is treated as
+ * abandoned by a crashed process and made available again. Comfortably
+ * longer than the provider call inside dispatchQueuedCall (which has its
+ * own fetch timeout), because re-running a dispatch whose worker is still
+ * alive must stay impossible.
+ */
+const JOB_CLAIM_TTL_MS = 5 * 60 * 1000;
+
 const MAX_JOB_ATTEMPTS = 5;
 
+export interface DispatchSummary {
+  jobs_seen: number;
+  started: number;
+  blocked: number;
+  deferred: number;
+  failed: number;
+  already_handled: number;
+}
+
 /**
- * Drains the workflow_jobs queue — same logic as POST /api/cron/process-jobs
- * but callable directly without HTTP so the internal scheduler can use it.
+ * Drains the workflow_jobs queue — the single implementation behind both
+ * POST /api/cron/process-jobs and the in-process scheduler, so the two can
+ * never drift apart.
+ *
+ * Each job is *claimed* with a conditional UPDATE before it is worked, so
+ * two concurrent drains (an internal worker plus an external cron, or two
+ * replicas) can never dispatch the same job. A claim older than
+ * JOB_CLAIM_TTL_MS is presumed abandoned and reclaimed.
  */
-async function processQueuedJobs(): Promise<TickResult> {
+export async function processQueuedJobs(
+  handle: typeof db = db,
+): Promise<DispatchSummary> {
   const now = new Date();
-  const jobs = await db
+  const staleBefore = new Date(now.getTime() - JOB_CLAIM_TTL_MS);
+
+  // Reap claims abandoned by a crashed process so the queue cannot wedge.
+  const reaped = await handle
+    .update(workflowJobsTable)
+    .set({ status: "queued", lockedAt: null })
+    .where(
+      and(
+        eq(workflowJobsTable.status, "dispatching"),
+        lte(workflowJobsTable.lockedAt, staleBefore),
+      ),
+    )
+    .returning({ id: workflowJobsTable.id });
+  if (reaped.length) {
+    logger.warn(
+      { jobs: reaped.map((row) => row.id) },
+      "Requeued call jobs whose worker disappeared mid-dispatch",
+    );
+  }
+
+  const jobs = await handle
     .select()
     .from(workflowJobsTable)
     .where(
@@ -186,9 +232,26 @@ async function processQueuedJobs(): Promise<TickResult> {
   let deferred = 0;
   let failed = 0;
   let already_handled = 0;
+  let claimedCount = 0;
 
   for (const job of jobs) {
-    const [call] = await db
+    // Atomically take the job. `status = queued` is the guard: only one
+    // worker can move it to `dispatching`, so only one runs the dispatch
+    // below and the provider sees exactly one request.
+    const [claimedJob] = await handle
+      .update(workflowJobsTable)
+      .set({ status: "dispatching", lockedAt: now })
+      .where(
+        and(
+          eq(workflowJobsTable.id, job.id),
+          eq(workflowJobsTable.status, "queued"),
+        ),
+      )
+      .returning();
+    if (!claimedJob) continue;
+    claimedCount += 1;
+
+    const [call] = await handle
       .select()
       .from(callsTable)
       .where(
@@ -200,7 +263,7 @@ async function processQueuedJobs(): Promise<TickResult> {
       .limit(1);
 
     if (!call) {
-      await db
+      await handle
         .update(workflowJobsTable)
         .set({
           status: "failed",
@@ -221,7 +284,7 @@ async function processQueuedJobs(): Promise<TickResult> {
     switch (result.outcome) {
       case "started":
         started += 1;
-        await db
+        await handle
           .update(workflowJobsTable)
           .set({ status: "completed" })
           .where(eq(workflowJobsTable.id, job.id));
@@ -229,7 +292,7 @@ async function processQueuedJobs(): Promise<TickResult> {
 
       case "already_handled":
         already_handled += 1;
-        await db
+        await handle
           .update(workflowJobsTable)
           .set({ status: "completed" })
           .where(eq(workflowJobsTable.id, job.id));
@@ -239,9 +302,11 @@ async function processQueuedJobs(): Promise<TickResult> {
       case "provider_not_configured":
         // Leave queued — workspace is still being configured
         deferred += 1;
-        await db
+        await handle
           .update(workflowJobsTable)
           .set({
+            status: "queued",
+            lockedAt: null,
             availableAt: new Date(now.getTime() + 15 * 60 * 1000),
             lastError: result.message,
           })
@@ -251,17 +316,27 @@ async function processQueuedJobs(): Promise<TickResult> {
       case "policy_blocked":
         blocked += 1;
         if (result.retryable && nextAttempts < MAX_JOB_ATTEMPTS) {
-          // Quiet hours resolve on their own — check again in 30 min
-          await db
+          // Quiet hours resolve themselves at a time we can name, so the
+          // retry is scheduled for the opening of the next allowed calling
+          // window rather than a fixed 30 minutes. A fixed timer cannot
+          // cross a night: a lead who enquired at 22:00 was blocked until
+          // 08:00, ten 30-minute ticks away, and the retry gave up long
+          // before then. `attempts` still counts deferrals so a
+          // misconfigured window cannot loop forever. No call was placed,
+          // so the lead's own attempt budget is untouched (the policy
+          // query excludes policy-blocked rows).
+          await handle
             .update(workflowJobsTable)
             .set({
+              status: "queued",
+              lockedAt: null,
               attempts: nextAttempts,
-              availableAt: new Date(now.getTime() + 30 * 60 * 1000),
+              availableAt: result.retryAt ?? new Date(now.getTime() + 30 * 60 * 1000),
               lastError: result.message,
             })
             .where(eq(workflowJobsTable.id, job.id));
         } else {
-          await db
+          await handle
             .update(workflowJobsTable)
             .set({
               status: "failed",
@@ -281,16 +356,18 @@ async function processQueuedJobs(): Promise<TickResult> {
             60 * 60 * 1000,
             Math.pow(2, nextAttempts) * 5 * 60 * 1000,
           );
-          await db
+          await handle
             .update(workflowJobsTable)
             .set({
+              status: "queued",
+              lockedAt: null,
               attempts: nextAttempts,
               availableAt: new Date(now.getTime() + backoffMs),
               lastError: result.message,
             })
             .where(eq(workflowJobsTable.id, job.id));
         } else {
-          await db
+          await handle
             .update(workflowJobsTable)
             .set({
               status: "failed",
