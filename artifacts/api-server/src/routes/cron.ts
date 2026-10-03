@@ -13,7 +13,8 @@ import {
   usersTable,
 } from "@workspace/db";
 import { processQueuedJobs } from "../lib/scheduler";
-import { sendWeeklyReportEmail } from "../lib/mailer";
+import { collectHealthAlerts } from "../lib/alerts";
+import { sendOpsAlertEmail, sendWeeklyReportEmail } from "../lib/mailer";
 import { getCurrentUsageRow } from "../lib/usage";
 import { createCronLimiter } from "../middlewares/rateLimit";
 
@@ -147,6 +148,35 @@ router.post("/cron/weekly-report", async (req, res): Promise<void> => {
   }
 
   res.json({ businesses: businesses.length, sent, skipped_no_smtp: skippedNoSmtp, skipped_no_owner: skippedNoOwner });
+});
+
+/**
+ * POST /api/cron/health-alerts — schedule every 15 minutes. Finds tenants
+ * with failed/uncertain calls piling up or a job queue nothing is draining
+ * and emails ALERT_EMAIL. Always answers 200 with the findings so the
+ * scheduler's own log is a second record; `notified` says whether a human
+ * was actually emailed.
+ */
+router.post("/cron/health-alerts", async (req, res): Promise<void> => {
+  const secret = process.env["CRON_SECRET"];
+  const provided = req.get("x-cron-secret") ?? "";
+  if (!secret || !timingSafeEqualStrings(provided, secret)) {
+    res.status(401).json({ error: "Invalid or missing cron secret" });
+    return;
+  }
+
+  const businesses = await collectHealthAlerts(db);
+  const alert = businesses.length > 0;
+  let notified = false;
+  if (alert) {
+    notified = await sendOpsAlertEmail(
+      `LeadSprint alert — ${businesses.length} workspace(s) need attention`,
+      businesses.map(
+        (b) => `${b.business_id}: ${b.failed_calls_24h} failed/uncertain calls in 24h, ${b.stalled_jobs} stalled job(s)`,
+      ),
+    );
+  }
+  res.json({ alert, notified, businesses });
 });
 
 export default router;

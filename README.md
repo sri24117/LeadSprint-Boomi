@@ -1,8 +1,9 @@
 # LeadSprint
 
-AI receptionist + speed-to-lead for small businesses. Twilio number → Retell
-AI voice agent → qualification → Cal.com booking or human transfer →
-operator console. See `docs/leadsprint-provider-setup.md` for the product
+AI speed-to-lead for small sales teams: the moment an enquiry arrives, an AI voice
+agent calls it back, qualifies it, and books a Cal.com appointment or transfers to a
+human — inside consent and quiet-hours limits, with an operator console. (Outbound
+follow-up only; inbound call answering is not yet supported.) See `docs/leadsprint-provider-setup.md` for the product
 architecture and `Coolify + Git + Collaboration Deploy Sheet` for the
 infra/collaboration workflow this repo is meant to be deployed with.
 
@@ -116,7 +117,7 @@ Drizzle CLI, with no adoption step. The app is the thing that adopts it.)
 
 ### Scheduled jobs
 
-Three endpoints are meant to run on a schedule (Coolify → Scheduled Tasks,
+Four endpoints are meant to run on a schedule (Coolify → Scheduled Tasks,
 or any cron), authenticated with the `CRON_SECRET` env var via the
 `x-cron-secret` header — not a Clerk session:
 
@@ -124,6 +125,7 @@ or any cron), authenticated with the `CRON_SECRET` env var via the
 |---|---|---|
 | `POST /api/cron/process-jobs` | every 5–10 min | Retries calls that were queued while Retell wasn't configured, or blocked by quiet hours — a quiet-hours retry is scheduled for the opening of the next allowed calling window, so an enquiry that arrives overnight is called in the morning. Each job is claimed atomically, so this endpoint and `ENABLE_INTERNAL_WORKER` can run side by side without dialing twice. The safety policy is re-checked on every attempt. |
 | `POST /api/cron/weekly-report` | weekly | Emails each business owner their weekly numbers (no-ops per business if SMTP isn't configured). |
+| `POST /api/cron/health-alerts` | every 15 min | Emails `ALERT_EMAIL` when a workspace has failed/uncertain calls piling up (`ALERT_FAILED_CALLS_THRESHOLD`, default 3 in 24h) or a job queue nothing is draining. Always answers 200 with the findings; `notified` says whether a human was emailed. |
 | `POST /api/cron/retention` | daily | Prunes raw provider-event payloads and stale activity rows past `RETENTION_DAYS`. Never touches leads, calls, contacts, or appointments. |
 
 ```bash

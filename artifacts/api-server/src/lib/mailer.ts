@@ -43,6 +43,16 @@ export interface WeeklyReportEmailInput {
   estimatedProviderCost: number;
 }
 
+// Business names are operator-entered; never interpolate them into HTML raw.
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderWeeklyReportEmail(input: WeeklyReportEmailInput): { subject: string; text: string; html: string } {
   const rows: Array<[string, string]> = [
     ["Leads received", String(input.leadsReceived)],
@@ -59,8 +69,8 @@ function renderWeeklyReportEmail(input: WeeklyReportEmailInput): { subject: stri
   const text = [`${input.businessName} — ${input.periodLabel}`, "", ...rows.map(([label, value]) => `${label}: ${value}`)].join("\n");
   const html = `
     <div style="font-family: -apple-system, Arial, sans-serif; max-width: 480px;">
-      <h2 style="margin-bottom: 4px;">${input.businessName}</h2>
-      <p style="color: #667; margin-top: 0;">${input.periodLabel}</p>
+      <h2 style="margin-bottom: 4px;">${escapeHtml(input.businessName)}</h2>
+      <p style="color: #667; margin-top: 0;">${escapeHtml(input.periodLabel)}</p>
       <table style="width: 100%; border-collapse: collapse;">
         ${rows
           .map(
@@ -71,6 +81,23 @@ function renderWeeklyReportEmail(input: WeeklyReportEmailInput): { subject: stri
       </table>
     </div>`;
   return { subject, text, html };
+}
+
+/**
+ * Emails the operator (ALERT_EMAIL) when the health check finds failed
+ * calls or a stalled queue. Returns `false` when there is nowhere to send
+ * it, so the caller can say so rather than pretend someone was told.
+ */
+export async function sendOpsAlertEmail(subject: string, lines: string[]): Promise<boolean> {
+  const to = env("ALERT_EMAIL");
+  if (!to || !smtpConfigured()) return false;
+  const from = env("SMTP_FROM") ?? env("SMTP_USER")!;
+  const text = lines.join("\n");
+  const html = `<div style="font-family: -apple-system, Arial, sans-serif;">${lines
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("")}</div>`;
+  await transporter().sendMail({ from, to, subject, text, html });
+  return true;
 }
 
 /**
