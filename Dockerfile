@@ -14,21 +14,26 @@
 # variables UI, or `--env-file` locally).
 
 FROM node:24-bookworm-slim AS base
-RUN corepack enable
+# Pinned so a build today and a build next month resolve with the same pnpm
+# (an unpinned corepack default floats with the base image). Bump deliberately.
+ARG PNPM_VERSION=12.5.1
+RUN npm install --global "pnpm@${PNPM_VERSION}"
 WORKDIR /repo
 
 # ---- install workspace dependencies -----------------------------------
 FROM base AS deps
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY tsconfig.json tsconfig.base.json ./
 COPY lib ./lib
 COPY artifacts ./artifacts
 COPY scripts ./scripts
-RUN pnpm install --no-frozen-lockfile
+# --frozen-lockfile: ship exactly the dependency versions CI tested. A stale
+# lockfile must fail the build, not silently resolve newer packages.
+RUN pnpm install --frozen-lockfile
 
 # ---- typecheck + build --------------------------------------------------
 FROM deps AS build
-ARG VITE_LEADSPRINT_DEMO_AUTH=true
+ARG VITE_LEADSPRINT_DEMO_AUTH=false
 ARG VITE_CLERK_PUBLISHABLE_KEY=""
 ENV VITE_LEADSPRINT_DEMO_AUTH=${VITE_LEADSPRINT_DEMO_AUTH}
 ENV VITE_CLERK_PUBLISHABLE_KEY=${VITE_CLERK_PUBLISHABLE_KEY}
@@ -39,23 +44,28 @@ ENV NODE_ENV=production
 # behind a sub-path proxy.
 ENV PORT=5000
 ENV BASE_PATH=/
+# Fail fast on a console build that can never work in this image. The API
+# refuses demo auth when NODE_ENV=production, so a demo-auth console would
+# 401 on every request. An empty Clerk key is only a warning: the console then
+# says "Sign-in is not configured" instead of failing the whole deploy.
+RUN if [ "${VITE_LEADSPRINT_DEMO_AUTH}" = "true" ]; then \
+      echo "ERROR: VITE_LEADSPRINT_DEMO_AUTH=true cannot be used for a production image (the API refuses demo auth when NODE_ENV=production). Set it to false." >&2; \
+      exit 1; \
+    fi; \
+    if [ -z "${VITE_CLERK_PUBLISHABLE_KEY}" ]; then \
+      echo "WARNING: VITE_CLERK_PUBLISHABLE_KEY is empty. Nobody will be able to sign in. Set it as a BUILD-time variable and redeploy." >&2; \
+    fi
 RUN pnpm run typecheck
 RUN pnpm --filter "@workspace/api-server" run build
 RUN pnpm --filter "@workspace/leadsprint" run build
 
 # Drop devDependencies from the workspace node_modules before shipping.
-RUN pnpm install --no-frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod
 
 # ---- runtime -------------------------------------------------------------
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /repo
 ENV NODE_ENV=production
-# Coolify's UI healthcheck shells out to curl (or wget), and the -slim base
-# image ships neither, so that check can never pass and Coolify rolls the new
-# container back to the previous one. Installed while still root.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
 # Run as the image's unprivileged `node` user, not root: a compromised
 # process must not be able to rewrite the bundle, install packages, or
 # touch anything else on the container filesystem. The app only needs to

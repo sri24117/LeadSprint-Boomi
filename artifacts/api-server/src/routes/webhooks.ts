@@ -37,7 +37,9 @@ const router: IRouter = Router();
 
 // Provider callbacks arrive without an operator session, so the limiter
 // runs before any signature check — a flood must be shed cheaply.
-router.use(createWebhookLimiter());
+// Scoped to /webhooks: this router is mounted at the /api root, so a bare
+// router.use(limiter) would also throttle every operator-console request.
+router.use("/webhooks", createWebhookLimiter());
 
 /**
  * Validates timestamp freshness to prevent webhook replay attacks.

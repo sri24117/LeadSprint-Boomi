@@ -48,6 +48,42 @@ describe("app wiring", () => {
     expect(res.status).toBe(403);
   });
 
+  // The webhook / agent / cron limiters exist to cap the surfaces that are
+  // reachable without an operator session. They must never throttle the
+  // operator console: the console polls, and an office of operators shares
+  // one client IP, so a 60-per-15-minutes cron budget spent on console
+  // traffic turns the whole product into 429s within minutes.
+  const TINY_LIMITS = {
+    NODE_ENV: "development",
+    LEADSPRINT_DEMO_AUTH: "true",
+    RATE_LIMIT_WEBHOOK_MAX: "3",
+    RATE_LIMIT_AGENT_MAX: "3",
+    RATE_LIMIT_CRON_MAX: "3",
+  };
+
+  it("does not apply the webhook/agent/cron limiters to operator-console routes", async () => {
+    const consoleApp = await bootAppWithEnv(TINY_LIMITS);
+    const statuses: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      statuses.push((await request(consoleApp).get("/api/no-such-route")).status);
+    }
+    expect(statuses).toEqual(Array(8).fill(404));
+  });
+
+  it.each([
+    ["webhook", "/api/webhooks/intake"],
+    ["cron", "/api/cron/process-jobs"],
+    ["agent", "/api/agent/availability"],
+  ])("still rate-limits the %s surface itself", async (_surface, path) => {
+    const limitedApp = await bootAppWithEnv(TINY_LIMITS);
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      statuses.push((await request(limitedApp).post(path).send({})).status);
+    }
+    expect(statuses.slice(0, 3).every((status) => status !== 429)).toBe(true);
+    expect(statuses.slice(3)).toEqual([429, 429, 429]);
+  });
+
   it("keeps API errors JSON: 401 when auth is unconfigured, 404 past it", async () => {
     // Default test env has no CLERK_SECRET_KEY, so the operator-console
     // auth gate answers before the unknown-path handler ever runs.

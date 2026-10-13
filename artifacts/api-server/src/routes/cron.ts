@@ -35,7 +35,9 @@ export function __resetCronDb(): void {
 
 // The scheduler calls each endpoint a few times an hour; anything more is
 // a misconfiguration or a flood, and the per-IP ceiling is set for that.
-router.use(createCronLimiter());
+// Scoped to /cron: this router is mounted at the /api root, so a bare
+// router.use(limiter) would also throttle every operator-console request.
+router.use("/cron", createCronLimiter());
 
 const DEFAULT_RETENTION_DAYS = 90;
 
