@@ -50,6 +50,12 @@ RUN pnpm install --no-frozen-lockfile --prod
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /repo
 ENV NODE_ENV=production
+# Coolify's UI healthcheck shells out to curl (or wget), and the -slim base
+# image ships neither, so that check can never pass and Coolify rolls the new
+# container back to the previous one. Installed while still root.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
 # Run as the image's unprivileged `node` user, not root: a compromised
 # process must not be able to rewrite the bundle, install packages, or
 # touch anything else on the container filesystem. The app only needs to
