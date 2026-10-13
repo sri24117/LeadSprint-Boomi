@@ -189,7 +189,9 @@ async function main() {
   log("stubs", "ready (nothing dials a real phone)");
 
   log("build", "building operator console (Vite) …");
-  await pnpm(["--filter", "@workspace/leadsprint", "run", "build"]);
+  // Explicit demo flag: a production console build with no Clerk key is
+  // otherwise "unconfigured" (see artifacts/leadsprint/src/lib/authMode.ts).
+  await pnpm(["--filter", "@workspace/leadsprint", "run", "build"], { VITE_LEADSPRINT_DEMO_AUTH: "true" });
   log("build", "building API server (esbuild) …");
   await pnpm(["--filter", "@workspace/api-server", "run", "build"]);
   log("build", "done");

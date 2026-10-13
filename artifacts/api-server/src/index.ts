@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { runMigrations } from "@workspace/db";
+import { describeDbConnectionError, runMigrations } from "@workspace/db";
 import { globalScheduler } from "./lib/scheduler";
 
 const rawPort = process.env["PORT"];
@@ -31,7 +31,7 @@ async function start() {
     // ready to serve webhooks that place phone calls: refuse to start, and
     // let the platform restart or roll back.
     logger.error(
-      { err },
+      { err, hint: describeDbConnectionError(err) ?? undefined },
       "Database schema could not be verified — refusing to start the API. " +
         "The app owns its schema via the Drizzle migrations in lib/db/drizzle; " +
         "check DATABASE_URL and that migrations can be applied.",

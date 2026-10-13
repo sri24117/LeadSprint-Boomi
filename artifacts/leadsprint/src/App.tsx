@@ -25,6 +25,7 @@ import {
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Button, Skeleton, initials } from '@/components/common';
+import { resolveAuthMode } from '@/lib/authMode';
 import NotFound from '@/pages/not-found';
 import TodayPage from '@/pages/today';
 import LeadsPage from '@/pages/leads';
@@ -63,11 +64,16 @@ const clerkPubKey = rawClerkKey
   ? publishableKeyFromHost(window.location.hostname, rawClerkKey)
   : '';
 
-// Local development / single-box pilot shortcut: when the build is made with
-// VITE_LEADSPRINT_DEMO_AUTH=true or when CLERK_PUBLISHABLE_KEY is not configured,
-// the console loads directly in demo mode instead of hanging on an empty Clerk skeleton.
-const DEMO_AUTH =
-  import.meta.env.VITE_LEADSPRINT_DEMO_AUTH === 'true' || !clerkPubKey;
+// How the console authenticates is fixed at build time (see lib/authMode.ts):
+// demo (explicit flag, or a dev build with no Clerk key), clerk, or — for a
+// production build with no Clerk key — "unconfigured", which renders a clear
+// setup message instead of a demo banner over an API that answers 401.
+const AUTH_MODE = resolveAuthMode({
+  demoFlag: import.meta.env.VITE_LEADSPRINT_DEMO_AUTH,
+  clerkKey: clerkPubKey,
+  isProd: import.meta.env.PROD,
+});
+const DEMO_AUTH = AUTH_MODE === 'demo';
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -361,6 +367,26 @@ function AuthError({ error }: { error?: unknown }) {
   );
 }
 
+function AuthNotConfigured() {
+  return (
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-5">
+      <div
+        className="w-full max-w-[460px] rounded-2xl border border-border bg-[hsl(var(--card))] p-8 text-center"
+        data-testid="auth-not-configured"
+      >
+        <AlertTriangle className="mx-auto text-[hsl(var(--destructive))]" size={24} />
+        <h1 className="mt-4 text-xl font-bold">Sign-in is not configured</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          This deployment was built without a Clerk publishable key, so nobody can sign in yet. The site
+          operator needs to set <code className="font-mono">VITE_CLERK_PUBLISHABLE_KEY</code> as a{' '}
+          <strong>build-time</strong> variable, set the server's <code className="font-mono">CLERK_SECRET_KEY</code> and{' '}
+          <code className="font-mono">CLERK_PUBLISHABLE_KEY</code>, and redeploy.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function DemoAuthNotice() {
   return (
     <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4">
@@ -550,6 +576,7 @@ function DemoApp() {
 }
 
 function App() {
+  if (AUTH_MODE === 'unconfigured') return <AuthNotConfigured />;
   return <WouterRouter base={basePath}>{DEMO_AUTH ? <DemoApp /> : <ClerkApp />}</WouterRouter>;
 }
 

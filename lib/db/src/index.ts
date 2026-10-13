@@ -20,13 +20,108 @@ if (!process.env.DATABASE_URL) {
 // managed Postgres wants a modest ceiling, and the local embedded dev
 // database (scripts/src/dev-postgres.mjs) serves one connection at a
 // time, so it needs DATABASE_POOL_MAX=1.
-const poolMax = Number(process.env.DATABASE_POOL_MAX ?? 10);
+//
+// A connect timeout is always set: without one, a database host that
+// silently drops packets leaves boot hanging forever — no error, no log
+// line, just a container that never becomes healthy.
+function positiveInteger(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function resolvePoolSettings(env: NodeJS.ProcessEnv = process.env): {
+  max: number;
+  connectionTimeoutMillis: number;
+} {
+  return {
+    max: positiveInteger(env.DATABASE_POOL_MAX, 10),
+    connectionTimeoutMillis: positiveInteger(env.DATABASE_CONNECT_TIMEOUT_MS, 10_000),
+  };
+}
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 10,
+  ...resolvePoolSettings(),
 });
 export const db = drizzle(pool, { schema });
+
+function errorChainText(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current && typeof current === "object" && depth < 8; depth += 1) {
+    const { message, code, cause } = current as {
+      message?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    };
+    if (typeof message === "string") parts.push(message);
+    if (typeof code === "string") parts.push(code);
+    current = cause;
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Turns a database connection failure into the one thing an operator should
+ * change. Boot refuses to start on any of these (deliberately), and the
+ * platform log otherwise shows only the raw driver error.
+ *
+ * Returns null when the error is not one we recognise. Never includes the
+ * connection string, so it is safe to log.
+ */
+export function describeDbConnectionError(error: unknown): string | null {
+  const text = errorChainText(error);
+
+  if (
+    /unable to verify the first certificate|self[- ]signed certificate|unable to get local issuer certificate|certificate (?:has expired|is not yet valid)|hostname\/IP does not match|SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE/i.test(
+      text,
+    )
+  ) {
+    return (
+      "The database's TLS certificate could not be verified. If Postgres is on your own " +
+      "private network (for example a Coolify database) and uses a self-signed certificate, end " +
+      "DATABASE_URL with ?uselibpqcompat=true&sslmode=require — that encrypts the connection " +
+      "without verifying the server's identity. For a database across the public internet, " +
+      "verify its CA instead (sslmode=verify-full with sslrootcert)."
+    );
+  }
+  if (/password authentication failed|role ".*" does not exist|no pg_hba\.conf entry/i.test(text)) {
+    return (
+      "Postgres rejected the credentials in DATABASE_URL. Check the user and password " +
+      "(URL-encode special characters, e.g. @ as %40). A Coolify Postgres applies its user and " +
+      "password only when its data volume is first created, so changing them in the Coolify UI " +
+      "later does not change the existing database — use the credentials it actually has."
+    );
+  }
+  if (/does not support SSL/i.test(text)) {
+    return (
+      "The database server does not support SSL. Remove sslmode from DATABASE_URL, or use " +
+      "sslmode=disable (private networks only)."
+    );
+  }
+  if (/database ".*" does not exist/i.test(text)) {
+    return (
+      "The database name in DATABASE_URL (the last path segment) does not exist on that " +
+      "server. Check the database name."
+    );
+  }
+  if (/connection timeout|ETIMEDOUT|timeout expired/i.test(text)) {
+    return (
+      "The database did not answer in time (DATABASE_CONNECT_TIMEOUT_MS, default 10000). " +
+      "Check that the host and port in DATABASE_URL are reachable from this container — on " +
+      "Coolify, the same Docker network as the database."
+    );
+  }
+  if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|EHOSTUNREACH|getaddrinfo/i.test(text)) {
+    return (
+      "Could not reach the database host/port in DATABASE_URL. On Coolify use the database's " +
+      "internal service name (not localhost) and confirm the port and that the database is running " +
+      "on the same network."
+    );
+  }
+  return null;
+}
 
 function migrationsFolderPath(): string {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));

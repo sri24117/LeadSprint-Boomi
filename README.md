@@ -81,7 +81,8 @@ On Coolify: **Add Resource → Git Repository (with GitHub App) → Dockerfile**
 build method, point at this repo's `main` branch, set the application port
 to `5000` (or whatever `PORT` you configure), and add the environment
 variables from `.env.example` in the Coolify UI. Full walkthrough in the
-deploy sheet PDF.
+deploy sheet PDF. The exact settings, a post-deploy checklist and a troubleshooting
+table built from real failed deploys are in [`docs/coolify-deploy.md`](docs/coolify-deploy.md).
 
 ### Database
 

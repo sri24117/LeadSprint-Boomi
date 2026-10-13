@@ -6,12 +6,18 @@ import router from "./routes";
 import { WorkspaceScopeError } from "./routes/leadsprint";
 import { logger } from "./lib/logger";
 import { createCorsMiddleware } from "./middlewares/cors";
+import { securityHeaders } from "./middlewares/securityHeaders";
 import {
   CLERK_PROXY_PATH,
   clerkProxyMiddleware,
 } from "./middlewares/clerkProxyMiddleware";
 
 const app: Express = express();
+
+// Don't advertise the framework, and put baseline hardening headers on every
+// response (API, errors, and the static console) before anything else runs.
+app.disable("x-powered-by");
+app.use(securityHeaders());
 
 // Production runs behind a TLS-terminating reverse proxy (Coolify/Traefik),
 // so req.protocol / req.ip must come from the X-Forwarded-* headers —

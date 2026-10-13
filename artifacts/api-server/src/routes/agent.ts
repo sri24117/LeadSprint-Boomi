@@ -21,7 +21,9 @@ const router: IRouter = Router();
 
 // Same threat class as the webhooks: reachable without an operator
 // session (Retell-signed instead), so shed floods before doing DB work.
-router.use(createAgentLimiter());
+// Scoped to /agent: this router is mounted at the /api root, so a bare
+// router.use(limiter) would also throttle every operator-console request.
+router.use("/agent", createAgentLimiter());
 
 function rawBody(req: Request): Buffer {
   return (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
