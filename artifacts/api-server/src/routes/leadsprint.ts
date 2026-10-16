@@ -10,7 +10,6 @@ import {
   contactsTable,
   leadsTable,
   providerEventsTable,
-  suppressionsTable,
   usageTable,
   usersTable,
   workflowJobsTable,
@@ -55,7 +54,8 @@ import {
   providerConfig,
   startRetellCall,
 } from "../lib/providers";
-import { evaluateCallPolicy } from "../lib/policy";
+import { evaluateCallPolicy, validateQuietHours } from "../lib/policy";
+import { normalizePhone, samePhone, suppressContact } from "../lib/suppression";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 import {
   ConsentEvidenceError,
@@ -419,9 +419,11 @@ router.post("/leads/:id/suppress", async (req, res): Promise<void> => {
   if (!params.success || !body.success) { res.status(400).json({ error: "Invalid suppression request" }); return; }
   const [row] = await db.select({ contact: contactsTable }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(eq(leadsTable.id, params.data.id), eq(leadsTable.businessId, BUSINESS_ID)));
   if (!row) { res.status(404).json({ error: "Lead not found" }); return; }
-  await db.update(contactsTable).set({ suppressedAt: new Date(), consentStatus: "suppressed" }).where(eq(contactsTable.id, row.contact.id));
-  await db.update(leadsTable).set({ status: "suppressed", nextAction: "No further calls", updatedAt: new Date() }).where(eq(leadsTable.id, params.data.id));
-  await db.insert(suppressionsTable).values({ id: id("suppression"), businessId: BUSINESS_ID, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator" });
+  // Previously wrote consent_status "suppressed", which is not a valid
+  // ConsentStatus — every later read of this lead (and the whole leads list)
+  // failed response validation with a 500. suppressContact revokes consent
+  // instead and records the number on the do-not-call list.
+  await suppressContact(db, { businessId: BUSINESS_ID, contactId: row.contact.id, phone: row.contact.phone, reason: body.data.reason ?? "Suppressed by operator", source: "operator" });
   const lead = await getLeadDto(params.data.id, BUSINESS_ID);
   res.json(SuppressLeadResponse.parse(lead));
 });
@@ -450,11 +452,12 @@ router.post("/leads/import", async (req, res): Promise<void> => {
   let imported = 0;
   let skipped = 0;
   for (const row of body.data.rows) {
-    const existing = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, BUSINESS_ID), eq(contactsTable.phone, row.phone))).limit(1);
+    const phone = normalizePhone(row.phone);
+    const existing = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, BUSINESS_ID), samePhone(contactsTable.phone, row.phone))).limit(1);
     if (existing[0]) { skipped += 1; continue; }
     const contactId = id("contact");
     const leadId = id("lead");
-    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone: row.phone, email: row.email ?? null, timezone: timezoneForUSPhoneNumber(row.phone), consentStatus: batchConsent.consentStatus, consentSource: batchConsent.consentSource, consentAt: batchConsent.consentAt });
+    await db.insert(contactsTable).values({ id: contactId, businessId: BUSINESS_ID, name: row.name, phone, email: row.email ?? null, timezone: timezoneForUSPhoneNumber(phone), consentStatus: batchConsent.consentStatus, consentSource: batchConsent.consentSource, consentAt: batchConsent.consentAt });
     await db.insert(leadsTable).values({ id: leadId, businessId: BUSINESS_ID, contactId, source: row.source ?? "CSV import", campaign: row.campaign ?? "Pilot campaign", project: row.project ?? (await getBusiness(BUSINESS_ID))?.projectName ?? "Configured project", propertyType: row.property_type ?? "Not specified", budgetLabel: row.budget_label ?? "Not specified", location: row.location ?? "Not specified", timeline: row.timeline ?? "Not specified", intentScore: 50, score: "warm", status: "new", nextAction: "Call lead" });
     imported += 1;
   }
@@ -669,6 +672,12 @@ router.patch("/business-settings", async (req, res): Promise<void> => {
   const BUSINESS_ID = scopedBusinessId(req);
   const body = UpdateBusinessSettingsBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.message }); return; }
+  // A quiet-hours value the gate can't parse used to be saved and then
+  // silently ignored, so "9pm-8am" meant "call at any hour". Reject it here.
+  if (body.data.quiet_hours !== undefined) {
+    const problem = validateQuietHours(body.data.quiet_hours);
+    if (problem) { res.status(400).json({ error: problem }); return; }
+  }
   const [updated] = await db.update(businessesTable).set({
     market: body.data.market, timezone: body.data.timezone, transferNumber: body.data.transfer_number, projectName: body.data.project_name,
     approvedFaq: body.data.approved_faq, qualificationQuestions: body.data.qualification_questions, recordingDisclosure: body.data.recording_disclosure,

@@ -32,6 +32,7 @@ All four are authenticated with `X-Retell-Signature`; `business_id` and
 | `book_appointment` | `POST /api/agent/book` | Books a slot. Returns `booked: false` on any failure — the agent must not claim success. |
 | `request_transfer` | `POST /api/agent/transfer` | Authorizes and logs a transfer, returns the number. `transfer_available: false` means fall back to a message. |
 | `capture_message` | `POST /api/agent/message` | Records the caller's message and flips the lead to manual follow-up. |
+| `opt_out` | `POST /api/agent/opt_out` | The caller asked not to be called again. Revokes consent and adds the number to the business's do-not-call list immediately; the safety gate then refuses every future call to it. As a backstop, a `capture_message` whose text reads like a do-not-call request does the same. |
 | `record_qualification` | `POST /api/agent/qualify` | Stores the answers to the approved questions. |
 
 ## Prompt (production)
@@ -88,8 +89,9 @@ All four are authenticated with `X-Retell-Signature`; `business_id` and
 >
 > **Ending.** If the caller is not interested or not qualified: thank
 > them for their time, confirm you will not call again if they ask that,
-> and end. If they ask to be removed from the list, say you will remove
-> them and call `capture_message` with "DO NOT CALL request".
+> and end. If they ask not to be called again or to be removed from the
+> list, call `opt_out` straight away, tell them they will not be called
+> again, and end the call. Do not ask why and do not try to change their mind.
 >
 > **Never:** quote a price that is not in the approved FAQ; promise
 > anything on behalf of an agent; claim a booking or transfer that did not

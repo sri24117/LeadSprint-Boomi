@@ -5,9 +5,11 @@ import {
   activitiesTable,
   businessesTable,
   callsTable,
-  db,
+  contactsTable,
+  db as defaultDb,
   leadsTable,
 } from "@workspace/db";
+import { suppressContact } from "../lib/suppression";
 import { AgentAuthError, parseAgentToolRequest } from "../lib/agentAuth";
 import {
   AvailabilityError,
@@ -18,6 +20,17 @@ import {
 import { createAgentLimiter } from "../middlewares/rateLimit";
 
 const router: IRouter = Router();
+
+// Swappable for tests, like every other route module here.
+let db: typeof defaultDb = defaultDb;
+
+export function __setAgentDb(next: typeof defaultDb): void {
+  db = next;
+}
+
+export function __resetAgentDb(): void {
+  db = defaultDb;
+}
 
 // Same threat class as the webhooks: reachable without an operator
 // session (Retell-signed instead), so shed floods before doing DB work.
@@ -140,6 +153,40 @@ router.post("/agent/transfer", async (req, res): Promise<void> => {
   res.status(200).json({ transfer_available: true, transfer_number: business.transferNumber });
 });
 
+// Phrases that mean "stop calling me". Used as a backstop for when the
+// model files a do-not-call request through capture_message instead of
+// calling opt_out — that used to set the lead's next action to "Call back",
+// i.e. it told a human to ring the person who had just asked not to be rung.
+const DO_NOT_CALL_PATTERN = /\b(do not call|don'?t call|stop call(ing)?|remove me|take me off|opt(ed)?[ -]?out|unsubscribe|no more calls)\b/i;
+
+async function optOutLeadContact(businessId: string, leadId: string, reason: string): Promise<boolean> {
+  const [row] = await db
+    .select({ contactId: contactsTable.id, phone: contactsTable.phone })
+    .from(leadsTable)
+    .innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id))
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.businessId, businessId)));
+  if (!row) return false;
+  await suppressContact(db, { businessId, contactId: row.contactId, phone: row.phone, reason, source: "agent_opt_out" });
+  return true;
+}
+
+/**
+ * The caller asked not to be contacted again. Revokes consent and puts the
+ * number on the business's do-not-call list immediately — the TCPA requires
+ * honouring a revocation made "by any reasonable means", and a request made
+ * on the call itself is the clearest one there is.
+ */
+router.post("/agent/opt_out", async (req, res): Promise<void> => {
+  const { businessId, leadId, callId, args } = toolContext(req);
+  const said = typeof args.reason === "string" ? args.reason.trim() : "";
+  const reason = `Caller asked not to be called again${callId ? ` (call ${callId})` : ""}${said ? `: "${said}"` : ""}`;
+  if (!(await optOutLeadContact(businessId, leadId, reason))) {
+    res.status(404).json({ opted_out: false, error: "Lead not found" });
+    return;
+  }
+  res.status(200).json({ opted_out: true });
+});
+
 router.post("/agent/message", async (req, res): Promise<void> => {
   const { businessId, leadId, callId, args } = toolContext(req);
   const messageBody = typeof args.message === "string" ? args.message.trim() : "";
@@ -154,6 +201,11 @@ router.post("/agent/message", async (req, res): Promise<void> => {
     title: "Message captured mid-call",
     detail: `Call ${callId || "unknown"}: "${messageBody}"`,
   });
+  if (DO_NOT_CALL_PATTERN.test(messageBody)) {
+    await optOutLeadContact(businessId, leadId, `Do-not-call request captured mid-call${callId ? ` (call ${callId})` : ""}: "${messageBody}"`);
+    res.status(200).json({ captured: true, opted_out: true });
+    return;
+  }
   await db.update(leadsTable).set({ nextAction: "Call back — caller left a message", updatedAt: new Date() }).where(and(eq(leadsTable.id, leadId), eq(leadsTable.businessId, businessId)));
   res.status(200).json({ captured: true });
 });
