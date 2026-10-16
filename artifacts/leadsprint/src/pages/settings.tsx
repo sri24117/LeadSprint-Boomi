@@ -272,6 +272,17 @@ export default function SettingsPage() {
           {update.isPending ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
+      {update.isError && (
+        // A rejected save used to vanish silently, which matters now that the
+        // API refuses calling-hours values the safety gate can't read.
+        <p
+          role="alert"
+          className="rounded-lg border border-[hsl(var(--destructive)/.4)] bg-[hsl(var(--destructive)/.08)] px-4 py-3 text-sm text-[hsl(var(--destructive))]"
+          data-testid="text-save-error"
+        >
+          Not saved: {(update.error as any)?.data?.error ?? update.error?.message ?? 'the server rejected these settings.'}
+        </p>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
         <section className="rounded-xl border border-border bg-[hsl(var(--card))] p-5">
@@ -313,7 +324,7 @@ export default function SettingsPage() {
               testId="input-transfer-number"
             />
             <Field
-              label="Quiet hours"
+              label="Quiet hours (24h, e.g. 21:00-08:00; calls never before 08:00 or after 20:00)"
               value={data.quiet_hours}
               onChange={(value) => set('quiet_hours', value)}
               testId="input-quiet-hours"

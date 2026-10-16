@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCallPolicy, isKillSwitchEngaged, isWithinQuietHours } from "./policy";
+import { evaluateCallPolicy, isKillSwitchEngaged, isWithinQuietHours, nextAllowedCallTime, validateQuietHours } from "./policy";
 
 describe("isWithinQuietHours — called-party timezone regression", () => {
   // These are the verified correct cases: a business in New York with
@@ -20,7 +20,11 @@ describe("isWithinQuietHours — called-party timezone regression", () => {
   it.each([
     { nyLabel: "09:00 ET (06:00 PT)", isoUtc: "2026-09-07T13:00:00Z", expectBlocked: true },
     { nyLabel: "20:30 ET (17:30 PT)", isoUtc: "2026-09-08T00:30:00Z", expectBlocked: false },
-    { nyLabel: "23:30 ET (20:30 PT)", isoUtc: "2026-09-08T03:30:00Z", expectBlocked: false },
+    // 20:30 PT is inside the business's 08:00–21:00 window but past the
+    // 20:00 floor LeadSprint applies everywhere (several states end at 8pm),
+    // so it is blocked. 19:30 PT is the last allowed half hour.
+    { nyLabel: "22:30 ET (19:30 PT)", isoUtc: "2026-09-08T02:30:00Z", expectBlocked: false },
+    { nyLabel: "23:30 ET (20:30 PT)", isoUtc: "2026-09-08T03:30:00Z", expectBlocked: true },
     { nyLabel: "00:30 ET next day (21:30 PT prior day)", isoUtc: "2026-09-08T04:30:00Z", expectBlocked: true },
   ])("$nyLabel against LA recipient -> blocked=$expectBlocked", ({ isoUtc, expectBlocked }) => {
     const now = new Date(isoUtc);
@@ -40,9 +44,53 @@ describe("isWithinQuietHours — called-party timezone regression", () => {
     expect(isWithinQuietHours("09:00-17:00", "America/New_York", new Date("2026-09-07T22:00:00Z"))).toBe(false); // 6pm ET
   });
 
-  it("returns false (never blocks) for an unparseable quiet-hours string", () => {
-    expect(isWithinQuietHours("garbage", "America/New_York", new Date())).toBe(false);
-    expect(isWithinQuietHours(null, "America/New_York", new Date())).toBe(false);
+  // Midday ET: every check below would be allowed if it failed open.
+  const middayET = new Date("2026-09-07T16:00:00Z");
+
+  it("blocks (fails closed) for an unparseable or missing quiet-hours setting", () => {
+    // These used to return false — "never blocks" — so a typo such as
+    // "9pm-8am" meant the business could be dialled at any hour.
+    for (const bad of ["garbage", "9pm-8am", "21:00-21:00", "25:00-08:00", "", null, undefined]) {
+      expect(isWithinQuietHours(bad, "America/New_York", middayET), String(bad)).toBe(true);
+    }
+  });
+
+  it("blocks when the recipient timezone can't be resolved, instead of falling back to UTC", () => {
+    expect(isWithinQuietHours("21:00-08:00", "Not/AZone", middayET)).toBe(true);
+    expect(isWithinQuietHours("21:00-08:00", "", middayET)).toBe(true);
+  });
+
+  it("never allows calls outside 08:00–20:00 recipient time, whatever the business configures", () => {
+    // A business that sets its quiet hours to 23:00–06:00 has asked for a
+    // wider window than the law allows; the floor still applies.
+    const wide = "23:00-06:00";
+    expect(isWithinQuietHours(wide, "America/New_York", new Date("2026-09-07T11:30:00Z"))).toBe(true); // 07:30 ET
+    expect(isWithinQuietHours(wide, "America/New_York", new Date("2026-09-07T12:00:00Z"))).toBe(false); // 08:00 ET
+    expect(isWithinQuietHours(wide, "America/New_York", new Date("2026-09-07T23:59:00Z"))).toBe(false); // 19:59 ET
+    expect(isWithinQuietHours(wide, "America/New_York", new Date("2026-09-08T00:00:00Z"))).toBe(true); // 20:00 ET
+    expect(isWithinQuietHours(wide, "America/New_York", new Date("2026-09-08T02:30:00Z"))).toBe(true); // 22:30 ET
+  });
+
+  it("schedules a retry for when the floor opens, not just the business window", () => {
+    // 20:30 ET with quiet hours 21:00–08:00: blocked by the floor alone.
+    const retryAt = nextAllowedCallTime("21:00-08:00", "America/New_York", new Date("2026-09-08T00:30:00Z"));
+    // 08:00 ET next morning = 12:00 UTC, within the 5-minute step + 1 minute.
+    expect(retryAt.getTime()).toBeGreaterThanOrEqual(new Date("2026-09-08T12:00:00Z").getTime());
+    expect(retryAt.getTime()).toBeLessThanOrEqual(new Date("2026-09-08T12:06:00Z").getTime());
+  });
+});
+
+describe("validateQuietHours", () => {
+  it("accepts the formats the gate reads", () => {
+    for (const ok of ["21:00-08:00", "21:00–08:00", "9:00 - 17:30", "20:00-09:00"]) {
+      expect(validateQuietHours(ok), ok).toBeNull();
+    }
+  });
+
+  it("rejects anything the gate would have to guess about", () => {
+    for (const bad of ["9pm-8am", "21:00", "21:00-21:00", "24:00-08:00", "21:60-08:00", "", null]) {
+      expect(validateQuietHours(bad), String(bad)).toMatch(/Quiet hours/);
+    }
   });
 });
 
@@ -74,6 +122,18 @@ describe("evaluateCallPolicy", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toBe("quiet_hours");
+  });
+
+  it("blocks a number on the do-not-call list even when this contact row was never suppressed", () => {
+    // The opt-out was recorded on an earlier contact for the same number.
+    const decision = evaluateCallPolicy({
+      business: baseBusiness,
+      contact: { consentStatus: "valid", suppressedAt: null, onSuppressionList: true, timezone: "America/New_York" },
+      attemptsSoFar: 0,
+      now: new Date("2026-09-07T18:00:00Z"),
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe("suppressed");
   });
 
   it("allows a call when consent is valid, not suppressed, timezone known, within hours, under attempt limit, kill switch off", () => {

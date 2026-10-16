@@ -35,6 +35,7 @@ import {
   workflowJobsTable,
 } from "@workspace/db";
 import { evaluateCallPolicy, nextAllowedCallTime } from "./policy";
+import { isPhoneSuppressed } from "./suppression";
 import { hasRetellConfigForMarket, startRetellCall } from "./providers";
 import { liveCallingBlockedReason } from "./onboarding";
 import { logger } from "./logger";
@@ -306,6 +307,9 @@ export async function dispatchQueuedCall(input: {
     contact: {
       consentStatus: contact?.consentStatus ?? "unknown",
       suppressedAt: contact?.suppressedAt ?? null,
+      // Checked by NUMBER, not just this contact row: an opt-out recorded on
+      // an earlier lead for the same phone must block this one too.
+      onSuppressionList: contact ? await isPhoneSuppressed(db, businessId, contact.phone) : false,
       timezone: contact?.timezone,
     },
     attemptsSoFar: priorAttempts,
