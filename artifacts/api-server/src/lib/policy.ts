@@ -38,6 +38,10 @@ export interface PolicyBusinessInput {
 export interface PolicyContactInput {
   consentStatus: string;
   suppressedAt: Date | null;
+  // True when this contact's number is on the business's do-not-call list
+  // (lib/suppression.ts), whichever contact row the opt-out was recorded on.
+  // Optional only so pure unit tests can omit it; the dispatcher always sets it.
+  onSuppressionList?: boolean;
   // The CALLED PARTY's IANA timezone (see lib/areaCodeTimezones.ts) — not
   // the business's. TCPA quiet hours (8am–9pm) are defined by the
   // recipient's local time. `null`/`undefined` means we couldn't
@@ -49,24 +53,43 @@ export interface PolicyContactInput {
 }
 
 /**
- * Parses a "HH:MM–HH:MM" / "HH:MM-HH:MM" quiet-hours window (24h clock,
- * business-local time) and reports whether `now` falls inside it. Handles
- * overnight windows such as 21:00–08:00.
+ * The widest window LeadSprint will ever dial in, in the RECIPIENT's local
+ * time, whatever a business configures. The federal TCPA window is
+ * 08:00–21:00, but several states (e.g. Florida, Oklahoma) cut off at 20:00,
+ * and a pilot sold across states should not depend on each operator knowing
+ * that. A business can narrow this with quiet hours; it cannot widen it.
  */
-export function isWithinQuietHours(
-  quietHours: string | null | undefined,
-  timezone: string,
-  now: Date = new Date(),
-): boolean {
-  if (!quietHours) return false;
-  const match = quietHours
-    .trim()
-    .match(/^(\d{1,2}):(\d{2})\s*[–-]\s*(\d{1,2}):(\d{2})$/);
-  if (!match) return false;
-  const [, startH, startM, endH, endM] = match;
+export const CALLING_WINDOW_FLOOR = { start: 8 * 60, end: 20 * 60 } as const;
 
-  let localHour: number;
-  let localMinute: number;
+interface QuietHoursWindow {
+  startMinutes: number;
+  endMinutes: number;
+}
+
+function parseQuietHours(quietHours: string | null | undefined): QuietHoursWindow | null {
+  if (!quietHours) return null;
+  const match = quietHours.trim().match(/^(\d{1,2}):(\d{2})\s*[–-]\s*(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const [, startH, startM, endH, endM] = match.map(Number);
+  if (startH > 23 || endH > 23 || startM > 59 || endM > 59) return null;
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+  // An empty window ("21:00-21:00") can't express anything meaningful.
+  if (startMinutes === endMinutes) return null;
+  return { startMinutes, endMinutes };
+}
+
+/**
+ * Returns a human-readable problem with a quiet-hours setting, or `null`
+ * when it is usable. Used to reject bad values when they are saved, instead
+ * of discovering them at dial time.
+ */
+export function validateQuietHours(quietHours: string | null | undefined): string | null {
+  if (parseQuietHours(quietHours)) return null;
+  return 'Quiet hours must be a 24-hour window like "21:00-08:00" (start and end must differ).';
+}
+
+function localMinutesIn(timezone: string, now: Date): number | null {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
@@ -74,18 +97,38 @@ export function isWithinQuietHours(
       minute: "2-digit",
       hourCycle: "h23",
     }).formatToParts(now);
-    localHour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
-    localMinute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+    const hour = Number(parts.find((p) => p.type === "hour")?.value);
+    const minute = Number(parts.find((p) => p.type === "minute")?.value);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return hour * 60 + minute;
   } catch {
-    localHour = now.getUTCHours();
-    localMinute = now.getUTCMinutes();
+    return null;
   }
+}
 
-  const nowMinutes = localHour * 60 + localMinute;
-  const startMinutes = Number(startH) * 60 + Number(startM);
-  const endMinutes = Number(endH) * 60 + Number(endM);
+/**
+ * Whether calling this recipient is blocked right now: inside the business's
+ * quiet-hours window, or outside the CALLING_WINDOW_FLOOR, both measured in
+ * the recipient's local time. Handles overnight windows such as 21:00–08:00.
+ *
+ * Fails CLOSED. An unparseable or missing quiet-hours value, or a timezone
+ * that can't be resolved, blocks the call. (It used to fail open: "9pm-8am"
+ * or an unknown zone meant "never blocked", and a bad zone silently fell
+ * back to UTC.)
+ */
+export function isWithinQuietHours(
+  quietHours: string | null | undefined,
+  timezone: string,
+  now: Date = new Date(),
+): boolean {
+  const window = parseQuietHours(quietHours);
+  if (!window) return true;
+  const nowMinutes = localMinutesIn(timezone, now);
+  if (nowMinutes === null) return true;
 
-  if (startMinutes === endMinutes) return false; // degenerate window, never blocks
+  if (nowMinutes < CALLING_WINDOW_FLOOR.start || nowMinutes >= CALLING_WINDOW_FLOOR.end) return true;
+
+  const { startMinutes, endMinutes } = window;
   if (startMinutes < endMinutes) {
     // Same-day window, e.g. 09:00–17:00
     return nowMinutes >= startMinutes && nowMinutes < endMinutes;
@@ -152,7 +195,7 @@ export function evaluateCallPolicy(input: {
     };
   }
 
-  if (contact.suppressedAt) {
+  if (contact.suppressedAt || contact.onSuppressionList) {
     return {
       allowed: false,
       reason: "suppressed",
@@ -172,7 +215,7 @@ export function evaluateCallPolicy(input: {
     return {
       allowed: false,
       reason: "quiet_hours",
-      message: `Outside allowed calling hours (${business.quietHours} ${contact.timezone}, recipient local time).`,
+      message: `Outside allowed calling hours (quiet hours ${business.quietHours}, never before 08:00 or after 20:00; ${contact.timezone}, recipient local time).`,
     };
   }
 

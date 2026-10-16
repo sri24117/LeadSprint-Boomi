@@ -153,8 +153,8 @@ curl -s -X PATCH $BASE/api/business-settings -H 'content-type: application/json'
 ### Dial script (Beat 4) — pick an in-window area code
 
 The policy checks the **recipient's** time zone, derived from the US area
-code. Pick any area code whose local time is inside 08:00–21:00 *now* (at
-least 3 of the 6 US zones are always open):
+code. Pick any area code whose local time is inside 08:00–20:00 *now*
+(LeadSprint never dials outside that window, whatever the quiet hours say):
 
 | Zone | Sample area codes | Local time when UTC is |
 |---|---|---|

@@ -11,6 +11,7 @@ import {
   leadsTable,
   providerEventsTable,
 } from "@workspace/db";
+import { normalizePhone, samePhone, suppressContact } from "../lib/suppression";
 import {
   extractRetellCall,
   providerConfig,
@@ -156,7 +157,9 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
   }
   const businessId = typeof body.business_id === "string" ? body.business_id : "";
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
+  // Stored and compared in one canonical form (E.164), so "(213) 555-0111"
+  // and "+12135550111" are recognised as the same person.
+  const phone = typeof body.phone === "string" ? normalizePhone(body.phone) : "";
   if (!businessId || !name || !phone) {
     res.status(400).json({ error: "business_id, name, and phone are required" });
     return;
@@ -166,8 +169,17 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Business not found" });
     return;
   }
-  const [existing] = await db.select({ id: contactsTable.id }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), eq(contactsTable.phone, phone))).limit(1);
+  const [existing] = await db.select({ id: contactsTable.id, phone: contactsTable.phone }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), samePhone(contactsTable.phone, body.phone as string))).limit(1);
   if (existing) {
+    // A lead source revoking consent for someone we already hold must take
+    // effect. Previously the duplicate check returned first, so a
+    // "consent_status: revoked" update was silently dropped and the person
+    // stayed callable.
+    if (body.consent_status === "revoked") {
+      await suppressContact(db, { businessId, contactId: existing.id, phone: existing.phone, reason: "Consent revoked by lead source", source: "intake_revoked" });
+      res.status(200).json({ accepted: true, reason: "consent_revoked", contact_id: existing.id });
+      return;
+    }
     res.status(200).json({ accepted: false, reason: "duplicate" });
     return;
   }

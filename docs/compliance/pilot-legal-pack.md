@@ -79,10 +79,13 @@ Align the script in `docs/retell-agent.md` to it.
 3. **Recording.** Recording is off unless the workspace enables it. If enabled, the
    disclosure above is mandatory; for all-party-consent states the caller must be
    told before recording starts. Counsel to confirm the state list.
-4. **Quiet hours.** No calls outside 08:00–21:00 recipient local time (or stricter
-   state rule); the system derives local time from the number and blocks when unknown.
-5. **Opt-out.** Any "stop"/"don't call me" ends the call, adds the number to the
-   suppression list the same day, and is honoured permanently.
+4. **Quiet hours.** No calls outside 08:00–20:00 recipient local time (stricter than
+   the federal 08:00–21:00, to cover state rules such as Florida's 8pm cutoff); the
+   system derives local time from the number and blocks when unknown. Counsel to
+   confirm no state the customer calls into is stricter still.
+5. **Opt-out.** Any "stop"/"don't call me" ends the call and adds the number to the
+   suppression list immediately (the agent's `opt_out` tool); it is honoured permanently,
+   for every later lead with the same number however it is formatted.
 6. **Human handoff.** Anything outside approved FAQ is transferred or captured as a
    message; the agent never invents pricing, availability or legal advice.
 7. **Kill switch.** Customer or Provider can set `LEADSPRINT_KILL_SWITCH` to stop all
