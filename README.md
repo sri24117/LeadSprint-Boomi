@@ -14,6 +14,20 @@ console (`artifacts/leadsprint`) · PostgreSQL via Drizzle ORM (`lib/db`) ·
 Clerk auth · OpenAPI-first contract with codegen (`lib/api-spec`,
 `lib/api-zod`, `lib/api-client-react`).
 
+## Industries (verticals)
+
+Each workspace runs an industry **profile** (`artifacts/api-server/src/lib/verticals`):
+the lead fields, urgency levels, appointment wording, qualification defaults and
+voice script that differ between industries. The engine (intake, consent, call queue,
+safety gate, booking) never branches on an industry; it reads the profile.
+
+| Vertical | Status | Docs |
+|---|---|---|
+| `real_estate` | Original behaviour, the default | `docs/retell-agent.md`, `docs/sales-demo.md` |
+| `home_services` (AC repair & plumbing) | Outbound callback to Meta and web leads, emergency alerts, service-area check | `docs/meta-lead-ads.md`, `docs/retell-agent-home-services.md`, `docs/sales-demo-home-services.md` |
+
+Design: `docs/superpowers/specs/2026-10-26-home-services-vertical-meta-leads-design.md`.
+
 ## Demo (one command)
 
 The fastest way to see the product — no Docker, no cloud accounts, no real
@@ -22,6 +36,7 @@ phone calls:
 ```bash
 pnpm demo            # fresh-ish boot, reuses the existing demo database
 pnpm demo --reset    # boot with a fresh, re-seeded demo database
+pnpm demo --vertical home_services   # the AC & plumbing demo (implies --reset)
 ```
 
 Boots embedded PostgreSQL, pushes the schema, starts Retell/Cal.com provider
