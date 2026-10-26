@@ -33,6 +33,8 @@ import {
 } from "../lib/callQueue";
 import { recordVoiceUsage, VOICE_COST_PER_MINUTE } from "../lib/usage";
 import { createWebhookLimiter } from "../middlewares/rateLimit";
+import { classifyUrgency, getProfile, isOutOfArea, validateDetails } from "../lib/verticals";
+import { sendBusinessAlertEmail } from "../lib/mailer";
 
 const router: IRouter = Router();
 
@@ -141,9 +143,88 @@ function signatureFor(req: Request): string | undefined {
   return req.get("x-retell-signature") ?? req.get("x-leadsprint-signature");
 }
 
+/**
+ * Optional second way to authenticate intake, for no-code senders (Zapier,
+ * Make, Meta's CRM link) that cannot compute an HMAC: send the intake secret
+ * itself in `x-leadsprint-key`. OFF unless INTAKE_ALLOW_KEY_AUTH=true. It is
+ * weaker than the signature (a captured request can be replayed), so TLS is
+ * required and HMAC stays the recommended method. Compared in constant time.
+ */
+function intakeKeyAccepted(req: Request, secret: string | undefined): boolean {
+  if (process.env["INTAKE_ALLOW_KEY_AUTH"] !== "true" || !secret) return false;
+  const provided = req.get("x-leadsprint-key");
+  if (!provided) return false;
+  const digest = (value: string) => crypto.createHash("sha256").update(value).digest();
+  return crypto.timingSafeEqual(digest(provided), digest(secret));
+}
+
+type IntakeConsent = ReturnType<typeof normalizeConsentEvidence> & { evidenceText: string | null };
+
+/**
+ * Consent for an incoming lead. For Meta lead-ad leads a sender cannot simply
+ * assert `consent_status: "valid"`: consent is valid only when the form's
+ * explicit consent was given AND its wording and form id are present, and that
+ * wording is kept as evidence. Anything less stays "unknown" and the safety
+ * gate refuses to call. A source may still REVOKE. Every other source behaves
+ * exactly as it always has.
+ */
+function resolveIntakeConsent(body: Record<string, unknown>, formId: string, consentText: string): IntakeConsent {
+  if (body.source === "meta_lead_ads" && body.consent_status !== "revoked") {
+    const source = formId ? `meta_lead_form:${formId}` : null;
+    if (body.consent_given === true && consentText && formId) {
+      return { consentStatus: "valid", consentSource: source, consentAt: new Date(), evidenceText: consentText };
+    }
+    return { consentStatus: "unknown", consentSource: source, consentAt: null, evidenceText: null };
+  }
+  return {
+    ...normalizeConsentEvidence({ status: body.consent_status, source: body.consent_source, at: body.consent_at }),
+    evidenceText: null,
+  };
+}
+
+/**
+ * Fire-and-forget: tells the client's owner about an emergency lead the moment
+ * it arrives. Never awaited by intake and never allowed to fail it.
+ */
+function notifyEmergencyLead(
+  req: Request,
+  input: {
+    to: string;
+    businessName: string;
+    name: string;
+    phone: string;
+    source: string;
+    details: Record<string, string | number | boolean>;
+    consentStatus: string;
+    outOfArea: boolean;
+  },
+): void {
+  const { details } = input;
+  const place = [details.address, details.zip].filter((v) => v !== undefined && v !== "").join(" · ");
+  const status = input.outOfArea
+    ? "OUT OF SERVICE AREA: the AI will not call this lead. Please decide how to respond."
+    : input.consentStatus === "valid"
+      ? "The AI assistant is calling this lead now, or as soon as legal calling hours allow."
+      : "No valid consent is recorded, so the AI will not call. Please contact the customer yourself.";
+  const lines = [
+    `EMERGENCY lead for ${input.businessName}`,
+    `Name: ${input.name}`,
+    `Phone: ${input.phone}`,
+    `Problem: ${details.problem ?? "not provided"}`,
+    `Service: ${details.service_type ?? "not provided"}`,
+    `Where: ${place || "not provided"}`,
+    `Source: ${input.source}`,
+    status,
+  ];
+  Promise.resolve()
+    .then(() => sendBusinessAlertEmail(input.to, `EMERGENCY lead: ${input.name}`, lines))
+    .catch((err) => req.log?.warn?.({ err }, "Emergency lead email could not be sent"));
+}
+
 router.post("/webhooks/intake", async (req, res): Promise<void> => {
   const config = providerConfig();
-  if (!verifyWebhookSignature(rawBody(req), signatureFor(req), config.intakeWebhookSecret)) {
+  const signed = verifyWebhookSignature(rawBody(req), signatureFor(req), config.intakeWebhookSecret);
+  if (!signed && !intakeKeyAccepted(req, config.intakeWebhookSecret)) {
     res.status(401).json({ error: "Invalid intake signature" });
     return;
   }
@@ -164,11 +245,25 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     res.status(400).json({ error: "business_id, name, and phone are required" });
     return;
   }
-  const [business] = await db.select({ id: businessesTable.id }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
   if (!business) {
     res.status(404).json({ error: "Business not found" });
     return;
   }
+  // Industry fields. Validated before anything is written, so a malformed
+  // payload creates nothing.
+  const detailsResult = validateDetails(body.details);
+  if (!detailsResult.ok) {
+    res.status(400).json({ error: detailsResult.error });
+    return;
+  }
+  const details = detailsResult.details;
+  if (body.consent_text !== undefined && (typeof body.consent_text !== "string" || body.consent_text.length > 1000)) {
+    res.status(400).json({ error: "consent_text must be a string of at most 1000 characters." });
+    return;
+  }
+  const consentText = typeof body.consent_text === "string" ? body.consent_text.trim() : "";
+  const formId = typeof body.form_id === "string" ? body.form_id.trim().slice(0, 100) : "";
   const [existing] = await db.select({ id: contactsTable.id, phone: contactsTable.phone }).from(contactsTable).where(and(eq(contactsTable.businessId, businessId), samePhone(contactsTable.phone, body.phone as string))).limit(1);
   if (existing) {
     // A lead source revoking consent for someone we already hold must take
@@ -189,13 +284,9 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
   // console shows why. `consent_status: "valid"` without a
   // `consent_source` is rejected outright rather than silently downgraded,
   // so a miswired lead source is visible to whoever integrated it.
-  let consent;
+  let consent: IntakeConsent;
   try {
-    consent = normalizeConsentEvidence({
-      status: body.consent_status,
-      source: body.consent_source,
-      at: body.consent_at,
-    });
+    consent = resolveIntakeConsent(body, formId, consentText);
   } catch (error) {
     if (error instanceof ConsentEvidenceError) {
       res.status(error.statusCode).json({ error: error.message });
@@ -206,7 +297,11 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
 
   const contactId = `contact_${crypto.randomUUID().slice(0, 12)}`;
   const leadId = `lead_${crypto.randomUUID().slice(0, 12)}`;
-  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null, timezone: timezoneForUSPhoneNumber(phone), consentStatus: consent.consentStatus, consentSource: consent.consentSource, consentAt: consent.consentAt });
+  await db.insert(contactsTable).values({ id: contactId, businessId, name, phone, email: typeof body.email === "string" ? body.email : null, timezone: timezoneForUSPhoneNumber(phone), consentStatus: consent.consentStatus, consentSource: consent.consentSource, consentAt: consent.consentAt, consentEvidence: consent.evidenceText });
+  // Urgency and the service-area decision are made here, once, from the
+  // workspace's profile; the engine itself never branches on an industry.
+  const urgency = classifyUrgency(getProfile(business.vertical), { urgency: body.urgency, problem: details.problem });
+  const outOfArea = isOutOfArea(business.serviceAreaZips ?? [], details);
   await db.insert(leadsTable).values({
     id: leadId,
     businessId,
@@ -221,9 +316,32 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     intentScore: 50,
     score: "warm",
     status: "new",
-    nextAction: "Call lead",
+    nextAction: outOfArea ? "Out of service area — review" : "Call lead",
+    details,
+    urgency,
   });
   await db.insert(activitiesTable).values({ id: `activity_${crypto.randomUUID().slice(0, 12)}`, businessId, type: "intake", title: `New lead received for ${name}`, detail: `Authenticated intake webhook accepted · ${describeConsent(consent)}` });
+  if (outOfArea) {
+    await db.insert(activitiesTable).values({
+      id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+      businessId,
+      type: "intake",
+      title: `${name} is outside the service area`,
+      detail: `ZIP ${String(details.zip ?? "from address")} is not in this business's service area, so no call was placed.`,
+    });
+  }
+  if (urgency === "emergency" && business.notifyEmail) {
+    notifyEmergencyLead(req, {
+      to: business.notifyEmail,
+      businessName: business.name,
+      name,
+      phone,
+      source: typeof body.source === "string" ? body.source : "webhook",
+      details,
+      consentStatus: consent.consentStatus,
+      outOfArea,
+    });
+  }
 
   // THE speed-to-lead step. Previously this webhook stopped at "lead
   // created" and a human had to open the console and press Call, which
@@ -232,15 +350,20 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
   // immediately; the safety policy gate still runs inside
   // dispatchQueuedCall, so consent/suppression/quiet hours/attempt limits
   // and the kill switch are all enforced before any provider request.
-  const queued = await enqueueCallForLead({
-    businessId,
-    leadId,
-    idempotencyKey: intakeIdempotencyKey(leadId),
-    source: "intake",
-  });
+  // A lead outside the business's service area is kept for review but never
+  // queued: calling someone the company cannot serve wastes provider minutes.
+  const queued = outOfArea
+    ? null
+    : await enqueueCallForLead({
+        businessId,
+        leadId,
+        idempotencyKey: intakeIdempotencyKey(leadId),
+        source: "intake",
+      });
 
   let callState: { call_id?: string; status: string; detail?: string } = {
     status: "not_queued",
+    ...(outOfArea ? { detail: "Outside the service area" } : {}),
   };
   if (queued) {
     const dispatch = await dispatchQueuedCall({ businessId, callId: queued.call.id });
@@ -266,6 +389,7 @@ router.post("/webhooks/intake", async (req, res): Promise<void> => {
     accepted: true,
     lead_id: leadId,
     consent_status: consent.consentStatus,
+    urgency,
     call: callState,
   });
 });
