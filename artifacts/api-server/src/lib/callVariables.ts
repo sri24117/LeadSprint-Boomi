@@ -74,9 +74,8 @@ export function buildCallVariables(input: {
       variables[field.key] = raw ? (field.type === "enum" ? labelFor(profile, field.key, raw) : raw) : NOT_PROVIDED;
     }
     variables.service_area = serviceAreaSentence(business.serviceAreaZips ?? []);
-    variables.pricing_policy =
-      business.pricingPolicy?.trim() ||
-      "Do not quote prices. A technician will confirm the cost on site.";
+    // Spoken verbatim by the agent when asked about cost, so it is a sentence.
+    variables.pricing_policy = business.pricingPolicy?.trim() || "A technician will confirm the cost on site.";
   }
 
   return Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, clip(value)]));
