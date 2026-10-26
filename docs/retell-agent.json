@@ -1,5 +1,5 @@
 {
-  "_comment": "LeadSprint production Retell agent. Import into Retell, then set RETELL_AGENT_ID (deployment) and businesses.retell_agent_id (workspace) to the resulting agent id so calls never run on the phone number's default agent. Replace {{...}} placeholders with the pilot workspace's configured values, and https://leadsprint.example.com with the deployment origin. Prose version and test matrix: docs/retell-agent.md.",
+  "_comment": "LeadSprint production Retell agent. Import into Retell, then set RETELL_AGENT_ID (deployment) and businesses.retell_agent_id (workspace) to the resulting agent id so calls never run on the phone number's default agent. The {{...}} placeholders are filled per call by the app (see lib/callVariables.ts), so do not edit them. Replace https://leadsprint.example.com with the deployment origin. Prose version and test matrix: docs/retell-agent.md.",
   "agent_name": "LeadSprint — property enquiry qualification (pilot)",
   "language": "en-US",
   "voice_id": "11labs-Adrian",

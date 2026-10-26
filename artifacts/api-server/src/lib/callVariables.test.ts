@@ -125,14 +125,18 @@ describe("buildCallVariables, home services", () => {
     expect(vars.pricing_policy).toBe("Our diagnostic visit is $89, applied to the repair.");
   });
 
-  it("tells the agent not to quote prices when the business set no pricing policy", () => {
-    const v = buildCallVariables({
-      business: { ...homeBusiness, pricingPolicy: null } as Business,
-      contact: { name: "Sam" },
-      lead: { project: "p", details: {}, urgency: null },
-    });
-    expect(v.pricing_policy).toMatch(/do not quote/i);
-    expect(v.pricing_policy).toMatch(/technician will confirm/i);
+  it("falls back to a sentence the agent can say aloud when the business set no pricing policy", () => {
+    // The prompt has the agent speak this variable verbatim when asked about cost,
+    // so it must be a sentence, not an instruction. "Never quote a price" lives
+    // in the prompt itself.
+    for (const unset of [null, "", "   "]) {
+      const v = buildCallVariables({
+        business: { ...homeBusiness, pricingPolicy: unset } as Business,
+        contact: { name: "Sam" },
+        lead: { project: "p", details: {}, urgency: null },
+      });
+      expect(v.pricing_policy).toBe("A technician will confirm the cost on site.");
+    }
   });
 
   it("asks for the ZIP when the business has no service area configured", () => {
