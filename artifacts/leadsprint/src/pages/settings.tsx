@@ -157,6 +157,9 @@ export default function SettingsPage() {
   const [testPhone, setTestPhone] = useState('');
   const [testStatus, setTestStatus] = useState<'idle' | 'calling' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState<string | null>(null);
+  // What the operator is typing in the service-area box. Kept as text so a
+  // trailing comma or space survives while they type the next ZIP.
+  const [zipText, setZipText] = useState<string | null>(null);
 
   if (settings.isLoading) {
     return (
@@ -188,6 +191,11 @@ export default function SettingsPage() {
       ai_disclosure: data.ai_disclosure,
       quiet_hours: data.quiet_hours,
       max_call_attempts: Number(data.max_call_attempts),
+      vertical: data.vertical,
+      // Empty means "clear it"; the server stores null.
+      notify_email: (data.notify_email ?? '').trim() || null,
+      service_area_zips: data.service_area_zips ?? [],
+      pricing_policy: (data.pricing_policy ?? '').trim() || null,
     };
     update.mutate(
       { data: payload },
@@ -329,6 +337,45 @@ export default function SettingsPage() {
               onChange={(value) => set('quiet_hours', value)}
               testId="input-quiet-hours"
             />
+            <label className="block text-sm font-semibold">
+              Industry
+              <select
+                value={data.vertical ?? 'real_estate'}
+                onChange={(event) => set('vertical', event.target.value)}
+                className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+                data-testid="select-vertical"
+              >
+                <option value="real_estate">Real estate</option>
+                <option value="home_services">Home services (AC &amp; plumbing)</option>
+              </select>
+            </label>
+            {data.vertical && data.vertical !== 'real_estate' && (
+              <>
+                <Field
+                  label="Emergency alert email"
+                  value={data.notify_email ?? ''}
+                  onChange={(value) => set('notify_email', value)}
+                  testId="input-notify-email"
+                />
+                <Field
+                  label="Service area ZIPs (comma-separated; 3 to 5 digits, e.g. 787, 78660)"
+                  value={zipText ?? (data.service_area_zips ?? []).join(', ')}
+                  onChange={(value) => {
+                    setZipText(value);
+                    set('service_area_zips', value.split(/[\s,]+/).filter(Boolean));
+                  }}
+                  testId="input-service-area"
+                />
+                <div className="sm:col-span-2">
+                  <TextArea
+                    label="What the assistant may say about cost (leave empty to say a technician will confirm)"
+                    value={data.pricing_policy ?? ''}
+                    onChange={(value) => set('pricing_policy', value)}
+                    testId="input-pricing-policy"
+                  />
+                </div>
+              </>
+            )}
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <Toggle

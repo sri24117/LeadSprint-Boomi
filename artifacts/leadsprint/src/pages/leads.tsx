@@ -22,10 +22,12 @@ import {
 } from 'lucide-react';
 import {
   getGetAppointmentsQueryKey,
+  getGetAuthMeQueryKey,
   getGetCallsQueryKey,
   getGetLeadQueryKey,
   getGetLeadsQueryKey,
   useBookAppointment,
+  useGetAuthMe,
   useGetAvailability,
   useGetLead,
   useGetLeads,
@@ -48,6 +50,7 @@ import {
   scoreTone,
   statusTone,
 } from '@/components/common';
+import { detailsText, displayValue, isEmergency, isRealEstateProfile, listSummary } from '@/lib/profile';
 
 export function LeadDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const queryClient = useQueryClient();
@@ -60,6 +63,11 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
   const [bookDate, setBookDate] = useState(new Date().toISOString().slice(0, 10));
   const [message, setMessage] = useState('');
   const data = lead.data;
+  // The workspace's industry profile. Real estate (and the moment before the
+  // session loads) keeps the original layout below, untouched.
+  const session = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
+  const profile = session.data?.profile;
+  const realEstate = isRealEstateProfile(profile);
 
   if (lead.isLoading) {
     return (
@@ -141,6 +149,11 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
               <p className="text-xs text-muted-foreground">
                 {data.source} · {data.campaign || 'No campaign'}
               </p>
+              {isEmergency(data) && (
+                <span className="mt-1.5 inline-block" data-testid="badge-emergency">
+                  <Badge className="bg-[#f7d6c7] text-[#8d371f]">Emergency</Badge>
+                </span>
+              )}
             </div>
           </div>
           <button className="rounded-lg p-2 text-muted-foreground hover:bg-[hsl(var(--muted))]" onClick={onClose} data-testid="button-close-lead">
@@ -228,14 +241,43 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
             <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <Info label="Phone" value={data.phone} />
               <Info label="Email" value={data.email || 'Not provided'} />
-              <Info label="Property" value={data.property_type} />
-              <Info label="Project" value={data.project} />
-              <Info label="Location" value={data.location} />
-              <Info label="Budget" value={data.budget_label} />
-              <Info label="Timeline" value={data.timeline} />
+              {realEstate ? (
+                <>
+                  <Info label="Property" value={data.property_type} />
+                  <Info label="Project" value={data.project} />
+                  <Info label="Location" value={data.location} />
+                  <Info label="Budget" value={data.budget_label} />
+                  <Info label="Timeline" value={data.timeline} />
+                </>
+              ) : (
+                <>
+                  {profile!.fields.map((field) =>
+                    // Free text (the problem, the address) is shown in full, not cut off.
+                    field.type === 'text' && !field.in_list ? (
+                      <div key={field.key} className="col-span-2" data-testid={`field-${field.key}`}>
+                        <p className="text-[11px] text-muted-foreground">{field.label}</p>
+                        <p className="mt-1 whitespace-pre-wrap break-words font-medium">{displayValue(data, field)}</p>
+                      </div>
+                    ) : (
+                      <div key={field.key} data-testid={`field-${field.key}`}>
+                        <Info label={field.label} value={displayValue(data, field)} />
+                      </div>
+                    ),
+                  )}
+                  <Info label="Source" value={data.source} />
+                </>
+              )}
               <Info label="Language" value={data.preferred_language} />
             </div>
           </section>
+
+          {data.consent_evidence && (
+            <section className="mt-6" data-testid="consent-evidence">
+              <h3 className="text-xs font-bold uppercase tracking-[.15em] text-muted-foreground">Consent wording</h3>
+              <p className="mt-2 rounded-lg bg-[hsl(var(--muted)/.65)] p-3 text-sm leading-6">{data.consent_evidence}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{data.consent_detail}</p>
+            </section>
+          )}
 
           <section className="mt-7 rounded-xl border border-border p-4">
             <div className="flex items-center justify-between">
@@ -336,6 +378,11 @@ export default function LeadsPage() {
   const leads = useGetLeads(params);
   const startCall = useStartCall();
   const queryClient = useQueryClient();
+  // Non-real-estate workspaces render lead fields from their industry profile;
+  // real estate keeps the original columns below.
+  const session = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
+  const profile = session.data?.profile;
+  const realEstate = isRealEstateProfile(profile);
 
   const handleExportCsv = () => {
     if (!leads.data?.length) return;
@@ -354,6 +401,7 @@ export default function LeadsPage() {
       'Consent Source',
       'Next Action',
       'Last Call',
+      ...(realEstate ? [] : ['Urgency', 'Details']),
     ];
     const escapeCsv = (val?: string | number | null) => {
       if (val === null || val === undefined) return '""';
@@ -375,6 +423,7 @@ export default function LeadsPage() {
       escapeCsv(lead.consent_source),
       escapeCsv(lead.next_action),
       escapeCsv(lead.last_call),
+      ...(realEstate ? [] : [escapeCsv(lead.urgency), escapeCsv(detailsText(lead, profile!))]),
     ]);
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -634,16 +683,26 @@ export default function LeadsPage() {
                   </span>
                 </button>
                 <div className="flex flex-wrap items-center gap-2">
+                  {isEmergency(lead) && <Badge className="bg-[#f7d6c7] text-[#8d371f]">Emergency</Badge>}
                   <Badge className={scoreTone(lead.score)}>{lead.score}</Badge>
                   <span className="font-mono text-xs text-muted-foreground">{lead.intent_score}/100</span>
-                  {lead.consent_status !== 'valid' && <ConsentBadge status={lead.consent_status} />}
+                  {lead.consent_status !== 'valid' && (
+                    <ConsentBadge status={lead.consent_status} unknownLabel={realEstate ? undefined : 'Needs consent'} />
+                  )}
                 </div>
-                <div>
-                  <p className="text-sm font-medium">{lead.property_type}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {lead.budget_label} · {lead.timeline}
-                  </p>
-                </div>
+                {realEstate ? (
+                  <div>
+                    <p className="text-sm font-medium">{lead.property_type}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {lead.budget_label} · {lead.timeline}
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm font-medium">{listSummary(lead, profile!).primary}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{listSummary(lead, profile!).secondary}</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-sm font-medium">{lead.next_action || 'Review lead'}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{relativeTime(lead.last_call || lead.created_at)}</p>
@@ -787,40 +846,44 @@ export default function LeadsPage() {
                     data-testid="input-add-lead-email"
                   />
                 </label>
-                <label className="block text-xs font-semibold">
-                  Property Type
-                  <input
-                    value={addLeadForm.property_type}
-                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, property_type: e.target.value }))}
-                    placeholder="Condo, Single Family, etc."
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
-                    data-testid="input-add-lead-property-type"
-                  />
-                </label>
+                {realEstate && (
+                  <label className="block text-xs font-semibold">
+                    Property Type
+                    <input
+                      value={addLeadForm.property_type}
+                      onChange={(e) => setAddLeadForm((prev) => ({ ...prev, property_type: e.target.value }))}
+                      placeholder="Condo, Single Family, etc."
+                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      data-testid="input-add-lead-property-type"
+                    />
+                  </label>
+                )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-xs font-semibold">
-                  Target Budget
-                  <input
-                    value={addLeadForm.budget_label}
-                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, budget_label: e.target.value }))}
-                    placeholder="$600k – $900k"
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
-                    data-testid="input-add-lead-budget"
-                  />
-                </label>
-                <label className="block text-xs font-semibold">
-                  Timeline
-                  <input
-                    value={addLeadForm.timeline}
-                    onChange={(e) => setAddLeadForm((prev) => ({ ...prev, timeline: e.target.value }))}
-                    placeholder="1–3 months"
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
-                    data-testid="input-add-lead-timeline"
-                  />
-                </label>
-              </div>
+              {realEstate && (
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-xs font-semibold">
+                    Target Budget
+                    <input
+                      value={addLeadForm.budget_label}
+                      onChange={(e) => setAddLeadForm((prev) => ({ ...prev, budget_label: e.target.value }))}
+                      placeholder="$600k – $900k"
+                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      data-testid="input-add-lead-budget"
+                    />
+                  </label>
+                  <label className="block text-xs font-semibold">
+                    Timeline
+                    <input
+                      value={addLeadForm.timeline}
+                      onChange={(e) => setAddLeadForm((prev) => ({ ...prev, timeline: e.target.value }))}
+                      placeholder="1–3 months"
+                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      data-testid="input-add-lead-timeline"
+                    />
+                  </label>
+                </div>
+              )}
 
               <label className="block text-xs font-semibold">
                 Consent Evidence Source *
