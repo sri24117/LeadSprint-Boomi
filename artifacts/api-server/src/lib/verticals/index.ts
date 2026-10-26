@@ -60,6 +60,34 @@ export function classifyUrgency(
   return "this_week";
 }
 
+/**
+ * Pulls what a profile recognises out of the voice agent's tool arguments:
+ * only fields the profile declares, only strings, enum values only if they are
+ * one of the options, free text capped at 500 characters. Everything else is
+ * ignored rather than failing the agent's mid-call tool request.
+ * `urgency` is returned separately because it lives in its own column.
+ */
+export function extractProfileDetails(
+  profile: VerticalProfile,
+  args: Record<string, unknown>,
+): { details: Record<string, string>; urgency?: string } {
+  const details: Record<string, string> = {};
+  let urgency: string | undefined;
+  for (const field of profile.fields) {
+    const raw = args[field.key];
+    if (typeof raw !== "string") continue;
+    const value = raw.trim().slice(0, MAX_VALUE_LENGTH);
+    if (!value) continue;
+    if (field.type === "enum" && !field.options?.some((option) => option.value === value)) continue;
+    if (field.storage === "column") {
+      if (field.key === "urgency") urgency = value;
+      continue;
+    }
+    details[field.key] = value;
+  }
+  return urgency === undefined ? { details } : { details, urgency };
+}
+
 export type DetailsValue = string | number | boolean;
 export type DetailsResult =
   | { ok: true; details: Record<string, DetailsValue> }

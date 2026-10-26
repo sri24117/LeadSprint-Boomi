@@ -98,6 +98,8 @@ export async function startRetellCall(input: {
   toNumber: string;
   market: "US" | "IN";
   metadata: Record<string, string>;
+  /** Fills the {{placeholders}} in the agent prompt for this call. */
+  dynamicVariables?: Record<string, string>;
 }): Promise<{ callId: string }> {
   const config = providerConfig().retell;
   const fromNumber =
@@ -125,6 +127,11 @@ export async function startRetellCall(input: {
       // of the tenant-specific one this call requested.
       override_agent_id: values.agentId,
       metadata: { ...input.metadata, market: input.market },
+      // Without this the prompt's {{lead_name}}, {{project_name}} and similar
+      // placeholders reach the caller unfilled.
+      ...(input.dynamicVariables && Object.keys(input.dynamicVariables).length > 0
+        ? { retell_llm_dynamic_variables: input.dynamicVariables }
+        : {}),
     }),
   });
   const body = await parseProviderResponse<{ call_id?: string }>(

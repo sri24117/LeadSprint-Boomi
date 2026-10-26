@@ -36,6 +36,7 @@ import {
 } from "@workspace/db";
 import { evaluateCallPolicy, nextAllowedCallTime } from "./policy";
 import { isPhoneSuppressed } from "./suppression";
+import { buildCallVariables } from "./callVariables";
 import { hasRetellConfigForMarket, startRetellCall } from "./providers";
 import { liveCallingBlockedReason } from "./onboarding";
 import { logger } from "./logger";
@@ -386,6 +387,22 @@ export async function dispatchQueuedCall(input: {
     };
   }
 
+  // Per-call prompt variables ({{lead_name}}, the job details...). Read BEFORE
+  // the provider request on purpose: a failure here means no call was placed,
+  // which is a certain outcome, unlike the "uncertain" zone below.
+  const [leadRow] = await db
+    .select()
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, attempt.leadId), eq(leadsTable.businessId, businessId)));
+  const dynamicVariables =
+    business && contact && leadRow
+      ? buildCallVariables({
+          business,
+          contact: { name: contact.name },
+          lead: { project: leadRow.project, details: leadRow.details ?? {}, urgency: leadRow.urgency ?? null },
+        })
+      : undefined;
+
   // From here on, a failure is "uncertain", never "didn't happen": Retell
   // may have accepted the call even if we never saw the response.
   try {
@@ -397,6 +414,7 @@ export async function dispatchQueuedCall(input: {
         lead_id: attempt.leadId,
         call_id: attempt.id,
       },
+      dynamicVariables,
     });
     const [started] = await db
       .update(callsTable)
