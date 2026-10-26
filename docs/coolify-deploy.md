@@ -45,6 +45,9 @@ postgres://USER:PASSWORD@INTERNAL-HOSTNAME:5432/DBNAME?uselibpqcompat=true&sslmo
 - **Credentials:** Coolify applies a database's user and password only when the data volume is first created. Changing them in the UI afterwards does not change the existing database. Use the credentials the database really has (the Postgres resource page → **Postgres URL (internal)**), or change the password inside the database with `ALTER USER`.
 - Never paste the URL into chat, tickets, or screenshots.
 
+Using **Supabase** for the database instead of a Coolify-managed Postgres? See
+`docs/supabase.md`, including the required step that closes Supabase's public data API.
+
 The app refuses to start if it cannot verify its schema, and logs a `hint`
 saying what to change. That is deliberate: a process that cannot reach its
 database must not accept webhooks that place phone calls.
