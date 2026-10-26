@@ -508,13 +508,44 @@ components:
         quiet_hours: { type: string }
         max_call_attempts: { type: number }
         suppression_enabled: { type: boolean }
-      required: [id, name, market, timezone, phone_number, transfer_number, recording_disclosure, ai_disclosure, quiet_hours, max_call_attempts, suppression_enabled]
+        vertical: { $ref: "#/components/schemas/VerticalId" }
+      required: [id, name, market, timezone, phone_number, transfer_number, recording_disclosure, ai_disclosure, quiet_hours, max_call_attempts, suppression_enabled, vertical]
+    VerticalId:
+      type: string
+      enum: [real_estate, home_services]
+    ProfileFieldOption:
+      type: object
+      properties:
+        value: { type: string }
+        label: { type: string }
+      required: [value, label]
+    ProfileField:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [text, enum] }
+        options: { type: array, items: { $ref: "#/components/schemas/ProfileFieldOption" } }
+        in_list: { type: boolean }
+        storage: { type: string, enum: [column, details] }
+      required: [key, label, type, options, in_list, storage]
+    VerticalProfile:
+      type: object
+      description: The industry profile of a workspace. The console renders lead fields, urgency and appointment wording from this instead of hard-coding one industry.
+      properties:
+        id: { $ref: "#/components/schemas/VerticalId" }
+        label: { type: string }
+        appointment_label: { type: string }
+        urgency_levels: { type: array, items: { $ref: "#/components/schemas/ProfileFieldOption" } }
+        fields: { type: array, items: { $ref: "#/components/schemas/ProfileField" } }
+      required: [id, label, appointment_label, urgency_levels, fields]
     AuthSession:
       type: object
       properties:
         user: { $ref: "#/components/schemas/User" }
         business: { $ref: "#/components/schemas/Business" }
-      required: [user, business]
+        profile: { $ref: "#/components/schemas/VerticalProfile" }
+      required: [user, business, profile]
     Score:
       type: string
       enum: [hot, warm, cold]
@@ -548,7 +579,17 @@ components:
         consent_at: { type: ["string", "null"] }
         consent_detail: { type: string }
         callable: { type: boolean }
-      required: [id, name, phone, email, preferred_language, source, campaign, project, property_type, budget_label, location, timeline, qualification_status, intent_score, score, next_action, status, suppressed, last_call, created_at, consent_status, consent_source, consent_at, consent_detail, callable]
+        details:
+          type: object
+          description: Industry-specific answers keyed by the workspace profile's fields (service type, problem, ZIP...). Empty for real estate.
+          additionalProperties:
+            oneOf:
+              - { type: string }
+              - { type: number }
+              - { type: boolean }
+        urgency: { type: ["string", "null"] }
+        consent_evidence: { type: ["string", "null"] }
+      required: [id, name, phone, email, preferred_language, source, campaign, project, property_type, budget_label, location, timeline, qualification_status, intent_score, score, next_action, status, suppressed, last_call, created_at, consent_status, consent_source, consent_at, consent_detail, callable, details, urgency, consent_evidence]
     ConsentStatus:
       type: string
       enum: [unknown, valid, revoked]
@@ -728,7 +769,10 @@ components:
             escalation_rules: { type: string }
             cal_event_type_id: { type: ["string", "null"] }
             retell_agent_id: { type: ["string", "null"] }
-          required: [project_name, services_or_property_types, approved_faq, qualification_questions, escalation_rules, cal_event_type_id, retell_agent_id]
+            notify_email: { type: ["string", "null"] }
+            service_area_zips: { type: array, items: { type: string } }
+            pricing_policy: { type: ["string", "null"] }
+          required: [project_name, services_or_property_types, approved_faq, qualification_questions, escalation_rules, cal_event_type_id, retell_agent_id, notify_email, service_area_zips, pricing_policy]
     BusinessSettingsUpdate:
       type: object
       properties:
@@ -742,6 +786,13 @@ components:
         ai_disclosure: { type: boolean }
         quiet_hours: { type: string }
         max_call_attempts: { type: number, minimum: 1, maximum: 10 }
+        vertical: { $ref: "#/components/schemas/VerticalId" }
+        notify_email: { type: ["string", "null"], maxLength: 254 }
+        service_area_zips:
+          type: array
+          maxItems: 200
+          items: { type: string, pattern: "^[0-9]{3,5}$" }
+        pricing_policy: { type: ["string", "null"], maxLength: 500 }
     WeeklyReport:
       type: object
       properties:

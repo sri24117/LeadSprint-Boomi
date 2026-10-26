@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ConsentStatus } from './consentStatus';
+import type { LeadDetails } from './leadDetails';
 import type { LeadStatus } from './leadStatus';
 import type { Score } from './score';
 
@@ -47,4 +48,10 @@ export interface Lead {
   consent_at: string | null;
   consent_detail: string;
   callable: boolean;
+  /** Industry-specific answers keyed by the workspace profile's fields (service type, problem, ZIP...). Empty for real estate. */
+  details: LeadDetails;
+  /** @nullable */
+  urgency: string | null;
+  /** @nullable */
+  consent_evidence: string | null;
 }

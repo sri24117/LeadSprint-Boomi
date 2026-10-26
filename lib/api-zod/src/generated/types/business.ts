@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { BusinessMarket } from './businessMarket';
+import type { VerticalId } from './verticalId';
 
 export interface Business {
   id: string;
@@ -19,4 +20,5 @@ export interface Business {
   quiet_hours: string;
   max_call_attempts: number;
   suppression_enabled: boolean;
+  vertical: VerticalId;
 }

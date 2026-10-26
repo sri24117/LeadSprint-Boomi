@@ -84,6 +84,14 @@ export const BusinessMarket = {
   IN: 'IN',
 } as const;
 
+export type VerticalId = typeof VerticalId[keyof typeof VerticalId];
+
+
+export const VerticalId = {
+  real_estate: 'real_estate',
+  home_services: 'home_services',
+} as const;
+
 export interface Business {
   id: string;
   name: string;
@@ -96,11 +104,54 @@ export interface Business {
   quiet_hours: string;
   max_call_attempts: number;
   suppression_enabled: boolean;
+  vertical: VerticalId;
+}
+
+export interface ProfileFieldOption {
+  value: string;
+  label: string;
+}
+
+export type ProfileFieldType = typeof ProfileFieldType[keyof typeof ProfileFieldType];
+
+
+export const ProfileFieldType = {
+  text: 'text',
+  enum: 'enum',
+} as const;
+
+export type ProfileFieldStorage = typeof ProfileFieldStorage[keyof typeof ProfileFieldStorage];
+
+
+export const ProfileFieldStorage = {
+  column: 'column',
+  details: 'details',
+} as const;
+
+export interface ProfileField {
+  key: string;
+  label: string;
+  type: ProfileFieldType;
+  options: ProfileFieldOption[];
+  in_list: boolean;
+  storage: ProfileFieldStorage;
+}
+
+/**
+ * The industry profile of a workspace. The console renders lead fields, urgency and appointment wording from this instead of hard-coding one industry.
+ */
+export interface VerticalProfile {
+  id: VerticalId;
+  label: string;
+  appointment_label: string;
+  urgency_levels: ProfileFieldOption[];
+  fields: ProfileField[];
 }
 
 export interface AuthSession {
   user: User;
   business: Business;
+  profile: VerticalProfile;
 }
 
 export type Score = typeof Score[keyof typeof Score];
@@ -123,6 +174,11 @@ export const LeadStatus = {
   closed: 'closed',
   suppressed: 'suppressed',
 } as const;
+
+/**
+ * Industry-specific answers keyed by the workspace profile's fields (service type, problem, ZIP...). Empty for real estate.
+ */
+export type LeadDetails = {[key: string]: string | number | boolean};
 
 export type ConsentStatus = typeof ConsentStatus[keyof typeof ConsentStatus];
 
@@ -171,6 +227,12 @@ export interface Lead {
   consent_at: string | null;
   consent_detail: string;
   callable: boolean;
+  /** Industry-specific answers keyed by the workspace profile's fields (service type, problem, ZIP...). Empty for real estate. */
+  details: LeadDetails;
+  /** @nullable */
+  urgency: string | null;
+  /** @nullable */
+  consent_evidence: string | null;
 }
 
 export type ChecklistItemSeverity = typeof ChecklistItemSeverity[keyof typeof ChecklistItemSeverity];
@@ -370,6 +432,11 @@ export type BusinessSettings = Business & ({
   cal_event_type_id: string | null;
   /** @nullable */
   retell_agent_id: string | null;
+  /** @nullable */
+  notify_email: string | null;
+  service_area_zips: string[];
+  /** @nullable */
+  pricing_policy: string | null;
 });
 
 export type BusinessSettingsUpdateMarket = typeof BusinessSettingsUpdateMarket[keyof typeof BusinessSettingsUpdateMarket];
@@ -395,6 +462,22 @@ export interface BusinessSettingsUpdate {
      * @maximum 10
      */
   max_call_attempts?: number;
+  vertical?: VerticalId;
+  /**
+     * @maxLength 254
+     * @nullable
+     */
+  notify_email?: string | null;
+  /**
+     * @maxItems 200
+     * @items.pattern ^[0-9]{3,5}$
+     */
+  service_area_zips?: string[];
+  /**
+     * @maxLength 500
+     * @nullable
+     */
+  pricing_policy?: string | null;
 }
 
 export interface WeeklyReport {

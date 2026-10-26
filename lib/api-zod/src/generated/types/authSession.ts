@@ -7,8 +7,10 @@
  */
 import type { Business } from './business';
 import type { User } from './user';
+import type { VerticalProfile } from './verticalProfile';
 
 export interface AuthSession {
   user: User;
   business: Business;
+  profile: VerticalProfile;
 }
