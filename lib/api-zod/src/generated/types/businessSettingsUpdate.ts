@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { BusinessSettingsUpdateMarket } from './businessSettingsUpdateMarket';
+import type { VerticalId } from './verticalId';
 
 export interface BusinessSettingsUpdate {
   market?: BusinessSettingsUpdateMarket;
@@ -22,4 +23,20 @@ export interface BusinessSettingsUpdate {
      * @maximum 10
      */
   max_call_attempts?: number;
+  vertical?: VerticalId;
+  /**
+     * @maxLength 254
+     * @nullable
+     */
+  notify_email?: string | null;
+  /**
+     * @maxItems 200
+     * @items.pattern ^[0-9]{3,5}$
+     */
+  service_area_zips?: string[];
+  /**
+     * @maxLength 500
+     * @nullable
+     */
+  pricing_policy?: string | null;
 }

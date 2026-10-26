@@ -17,4 +17,9 @@ export type BusinessSettings = Business & ({
   cal_event_type_id: string | null;
   /** @nullable */
   retell_agent_id: string | null;
+  /** @nullable */
+  notify_email: string | null;
+  service_area_zips: string[];
+  /** @nullable */
+  pricing_policy: string | null;
 });

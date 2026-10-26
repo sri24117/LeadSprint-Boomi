@@ -61,8 +61,29 @@ export const GetAuthMeResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
-})
+  "suppression_enabled": zod.boolean(),
+  "vertical": zod.enum(['real_estate', 'home_services'])
+}),
+  "profile": zod.object({
+  "id": zod.enum(['real_estate', 'home_services']),
+  "label": zod.string(),
+  "appointment_label": zod.string(),
+  "urgency_levels": zod.array(zod.object({
+  "value": zod.string(),
+  "label": zod.string()
+})),
+  "fields": zod.array(zod.object({
+  "key": zod.string(),
+  "label": zod.string(),
+  "type": zod.enum(['text', 'enum']),
+  "options": zod.array(zod.object({
+  "value": zod.string(),
+  "label": zod.string()
+})),
+  "in_list": zod.boolean(),
+  "storage": zod.enum(['column', 'details'])
+}))
+}).describe('The industry profile of a workspace. The console renders lead fields, urgency and appointment wording from this instead of hard-coding one industry.')
 })
 
 
@@ -171,7 +192,10 @@ export const GetLeadsResponseItem = zod.object({
   "consent_source": zod.string().nullable(),
   "consent_at": zod.string().nullable(),
   "consent_detail": zod.string(),
-  "callable": zod.boolean()
+  "callable": zod.boolean(),
+  "details": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()])).describe('Industry-specific answers keyed by the workspace profile\'s fields (service type, problem, ZIP...). Empty for real estate.'),
+  "urgency": zod.string().nullable(),
+  "consent_evidence": zod.string().nullable()
 })
 export const GetLeadsResponse = zod.array(GetLeadsResponseItem)
 
@@ -232,7 +256,10 @@ export const ImportLeadsResponse = zod.object({
   "consent_source": zod.string().nullable(),
   "consent_at": zod.string().nullable(),
   "consent_detail": zod.string(),
-  "callable": zod.boolean()
+  "callable": zod.boolean(),
+  "details": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()])).describe('Industry-specific answers keyed by the workspace profile\'s fields (service type, problem, ZIP...). Empty for real estate.'),
+  "urgency": zod.string().nullable(),
+  "consent_evidence": zod.string().nullable()
 }))
 })
 
@@ -276,7 +303,10 @@ export const GetLeadResponse = zod.object({
   "consent_source": zod.string().nullable(),
   "consent_at": zod.string().nullable(),
   "consent_detail": zod.string(),
-  "callable": zod.boolean()
+  "callable": zod.boolean(),
+  "details": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()])).describe('Industry-specific answers keyed by the workspace profile\'s fields (service type, problem, ZIP...). Empty for real estate.'),
+  "urgency": zod.string().nullable(),
+  "consent_evidence": zod.string().nullable()
 })
 
 
@@ -325,7 +355,10 @@ export const UpdateLeadResponse = zod.object({
   "consent_source": zod.string().nullable(),
   "consent_at": zod.string().nullable(),
   "consent_detail": zod.string(),
-  "callable": zod.boolean()
+  "callable": zod.boolean(),
+  "details": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()])).describe('Industry-specific answers keyed by the workspace profile\'s fields (service type, problem, ZIP...). Empty for real estate.'),
+  "urgency": zod.string().nullable(),
+  "consent_evidence": zod.string().nullable()
 })
 
 
@@ -372,7 +405,10 @@ export const SuppressLeadResponse = zod.object({
   "consent_source": zod.string().nullable(),
   "consent_at": zod.string().nullable(),
   "consent_detail": zod.string(),
-  "callable": zod.boolean()
+  "callable": zod.boolean(),
+  "details": zod.record(zod.string(), zod.union([zod.string(),zod.number(),zod.boolean()])).describe('Industry-specific answers keyed by the workspace profile\'s fields (service type, problem, ZIP...). Empty for real estate.'),
+  "urgency": zod.string().nullable(),
+  "consent_evidence": zod.string().nullable()
 })
 
 
@@ -565,7 +601,8 @@ export const GetBusinessSettingsResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "vertical": zod.enum(['real_estate', 'home_services'])
 }).and(zod.object({
   "project_name": zod.string(),
   "services_or_property_types": zod.array(zod.string()),
@@ -573,7 +610,10 @@ export const GetBusinessSettingsResponse = zod.object({
   "qualification_questions": zod.array(zod.string()),
   "escalation_rules": zod.string(),
   "cal_event_type_id": zod.string().nullable(),
-  "retell_agent_id": zod.string().nullable()
+  "retell_agent_id": zod.string().nullable(),
+  "notify_email": zod.string().nullable(),
+  "service_area_zips": zod.array(zod.string()),
+  "pricing_policy": zod.string().nullable()
 }))
 
 
@@ -581,6 +621,13 @@ export const GetBusinessSettingsResponse = zod.object({
  * @summary Update business configuration
  */
 export const updateBusinessSettingsBodyMaxCallAttemptsMax = 10;
+
+export const updateBusinessSettingsBodyNotifyEmailMax = 254;
+
+export const updateBusinessSettingsBodyServiceAreaZipsItemRegExp = new RegExp('^[0-9]{3,5}$');
+export const updateBusinessSettingsBodyServiceAreaZipsMax = 200;
+
+export const updateBusinessSettingsBodyPricingPolicyMax = 500;
 
 
 
@@ -594,7 +641,11 @@ export const UpdateBusinessSettingsBody = zod.object({
   "recording_disclosure": zod.boolean().optional(),
   "ai_disclosure": zod.boolean().optional(),
   "quiet_hours": zod.string().optional(),
-  "max_call_attempts": zod.number().min(1).max(updateBusinessSettingsBodyMaxCallAttemptsMax).optional()
+  "max_call_attempts": zod.number().min(1).max(updateBusinessSettingsBodyMaxCallAttemptsMax).optional(),
+  "vertical": zod.enum(['real_estate', 'home_services']).optional(),
+  "notify_email": zod.string().max(updateBusinessSettingsBodyNotifyEmailMax).nullish(),
+  "service_area_zips": zod.array(zod.string().regex(updateBusinessSettingsBodyServiceAreaZipsItemRegExp)).max(updateBusinessSettingsBodyServiceAreaZipsMax).optional(),
+  "pricing_policy": zod.string().max(updateBusinessSettingsBodyPricingPolicyMax).nullish()
 })
 
 export const UpdateBusinessSettingsResponse = zod.object({
@@ -608,7 +659,8 @@ export const UpdateBusinessSettingsResponse = zod.object({
   "ai_disclosure": zod.boolean(),
   "quiet_hours": zod.string(),
   "max_call_attempts": zod.number(),
-  "suppression_enabled": zod.boolean()
+  "suppression_enabled": zod.boolean(),
+  "vertical": zod.enum(['real_estate', 'home_services'])
 }).and(zod.object({
   "project_name": zod.string(),
   "services_or_property_types": zod.array(zod.string()),
@@ -616,7 +668,10 @@ export const UpdateBusinessSettingsResponse = zod.object({
   "qualification_questions": zod.array(zod.string()),
   "escalation_rules": zod.string(),
   "cal_event_type_id": zod.string().nullable(),
-  "retell_agent_id": zod.string().nullable()
+  "retell_agent_id": zod.string().nullable(),
+  "notify_email": zod.string().nullable(),
+  "service_area_zips": zod.array(zod.string()),
+  "pricing_policy": zod.string().nullable()
 }))
 
 

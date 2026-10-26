@@ -55,6 +55,7 @@ import {
   startRetellCall,
 } from "../lib/providers";
 import { evaluateCallPolicy, validateQuietHours } from "../lib/policy";
+import { getProfile, toApiProfile } from "../lib/verticals";
 import { normalizePhone, samePhone, suppressContact } from "../lib/suppression";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 import {
@@ -321,6 +322,10 @@ async function getLeadDto(leadId: string, businessId = BUSINESS_ID) {
       consentAt: row.contact.consentAt,
     }),
     callable: row.contact.consentStatus === "valid" && !row.contact.suppressedAt,
+    // Industry-specific answers and the wording the person consented to.
+    details: row.lead.details ?? {},
+    urgency: row.lead.urgency ?? null,
+    consent_evidence: row.contact.consentEvidence ?? null,
   };
 }
 
@@ -367,7 +372,8 @@ router.get("/auth/me", async (_req, res): Promise<void> => {
   if (!user || !business) { res.status(503).json({ error: "Operator setup is not ready" }); return; }
   res.json(GetAuthMeResponse.parse({
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled },
+    business: { id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber, recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled, vertical: getProfile(business.vertical).id },
+    profile: toApiProfile(getProfile(business.vertical)),
   }));
 });
 
@@ -381,7 +387,7 @@ router.get("/leads", async (req, res): Promise<void> => {
   if (query.data.status) filters.push(eq(leadsTable.status, query.data.status));
   if (query.data.score) filters.push(eq(leadsTable.score, query.data.score));
   if (query.data.search) {
-    filters.push(or(ilike(contactsTable.name, `%${query.data.search}%`), ilike(contactsTable.phone, `%${query.data.search}%`), ilike(leadsTable.location, `%${query.data.search}%`))!);
+    filters.push(or(ilike(contactsTable.name, `%${query.data.search}%`), ilike(contactsTable.phone, `%${query.data.search}%`), ilike(leadsTable.location, `%${query.data.search}%`), sql`${leadsTable.details}::text ilike ${`%${query.data.search}%`}`)!);
   }
   const rows = await db.select({ id: leadsTable.id }).from(leadsTable).innerJoin(contactsTable, eq(leadsTable.contactId, contactsTable.id)).where(and(...filters)).orderBy(desc(leadsTable.createdAt));
   const result = await Promise.all(rows.map((row) => getLeadDto(row.id, BUSINESS_ID)));
@@ -665,6 +671,7 @@ router.get("/business-settings", async (_req, res): Promise<void> => {
     id: business.id, name: business.name, market: business.market, timezone: business.timezone, phone_number: business.phoneNumber, transfer_number: business.transferNumber,
     recording_disclosure: business.recordingDisclosure, ai_disclosure: business.aiDisclosure, quiet_hours: business.quietHours, max_call_attempts: business.maxCallAttempts, suppression_enabled: business.suppressionEnabled,
     project_name: business.projectName, services_or_property_types: business.servicesOrPropertyTypes, approved_faq: business.approvedFaq, qualification_questions: business.qualificationQuestions, escalation_rules: business.escalationRules, cal_event_type_id: business.calEventTypeId, retell_agent_id: business.retellAgentId,
+    vertical: getProfile(business.vertical).id, notify_email: business.notifyEmail, service_area_zips: business.serviceAreaZips, pricing_policy: business.pricingPolicy,
   }));
 });
 
@@ -678,16 +685,29 @@ router.patch("/business-settings", async (req, res): Promise<void> => {
     const problem = validateQuietHours(body.data.quiet_hours);
     if (problem) { res.status(400).json({ error: problem }); return; }
   }
+  // An email the alert sender cannot deliver to is worse than none: reject it
+  // here. An empty string means "clear it", same as null.
+  let notifyEmail: string | null | undefined;
+  if (body.data.notify_email !== undefined) {
+    const trimmed = body.data.notify_email === null ? "" : body.data.notify_email.trim();
+    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      res.status(400).json({ error: "notify_email must be a valid email address." });
+      return;
+    }
+    notifyEmail = trimmed || null;
+  }
   const [updated] = await db.update(businessesTable).set({
     market: body.data.market, timezone: body.data.timezone, transferNumber: body.data.transfer_number, projectName: body.data.project_name,
     approvedFaq: body.data.approved_faq, qualificationQuestions: body.data.qualification_questions, recordingDisclosure: body.data.recording_disclosure,
-    aiDisclosure: body.data.ai_disclosure, quietHours: body.data.quiet_hours, maxCallAttempts: body.data.max_call_attempts, updatedAt: new Date(),
+    aiDisclosure: body.data.ai_disclosure, quietHours: body.data.quiet_hours, maxCallAttempts: body.data.max_call_attempts,
+    vertical: body.data.vertical, notifyEmail, serviceAreaZips: body.data.service_area_zips, pricingPolicy: body.data.pricing_policy, updatedAt: new Date(),
   }).where(eq(businessesTable.id, BUSINESS_ID)).returning();
   if (!updated) { res.status(404).json({ error: "Business not found" }); return; }
   res.json(UpdateBusinessSettingsResponse.parse({
     id: updated.id, name: updated.name, market: updated.market, timezone: updated.timezone, phone_number: updated.phoneNumber, transfer_number: updated.transferNumber,
     recording_disclosure: updated.recordingDisclosure, ai_disclosure: updated.aiDisclosure, quiet_hours: updated.quietHours, max_call_attempts: updated.maxCallAttempts, suppression_enabled: updated.suppressionEnabled,
     project_name: updated.projectName, services_or_property_types: updated.servicesOrPropertyTypes, approved_faq: updated.approvedFaq, qualification_questions: updated.qualificationQuestions, escalation_rules: updated.escalationRules, cal_event_type_id: updated.calEventTypeId, retell_agent_id: updated.retellAgentId,
+    vertical: getProfile(updated.vertical).id, notify_email: updated.notifyEmail, service_area_zips: updated.serviceAreaZips, pricing_policy: updated.pricingPolicy,
   }));
 });
 
