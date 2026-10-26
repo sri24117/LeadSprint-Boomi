@@ -13,6 +13,7 @@
  *
  *   pnpm demo            # boot (reuses the existing demo database)
  *   pnpm demo --reset    # boot with a fresh database
+ *   pnpm demo --vertical home_services   # the AC & plumbing demo (implies --reset)
  *
  * Ports: DEMO_PORT (5000), DEV_PG_PORT (5433), STUB_PORT (5510).
  * Ctrl+C stops everything.
@@ -34,7 +35,18 @@ const STUB_PORT = Number(process.env.STUB_PORT ?? 5510);
 const DATABASE_URL = `postgres://postgres:postgres@127.0.0.1:${PG_PORT}/postgres`;
 const PG_DATA_DIR = path.join(REPO_ROOT, ".devdata", "pglite");
 const STATIC_DIR = path.join(REPO_ROOT, "artifacts", "leadsprint", "dist", "public");
-const RESET = process.argv.includes("--reset");
+// --vertical home_services boots the AC & plumbing demo ("Frostline HVAC & Plumbing")
+// instead of the real-estate one. A different vertical needs a different seeded
+// database, so an explicit --vertical always starts fresh.
+const VERTICAL = (() => {
+  const at = process.argv.indexOf("--vertical");
+  return at >= 0 ? process.argv[at + 1] : null;
+})();
+if (VERTICAL !== null && !["real_estate", "home_services"].includes(VERTICAL)) {
+  console.error(`[demo] unknown --vertical ${JSON.stringify(VERTICAL)}. Use real_estate or home_services.`);
+  process.exit(1);
+}
+const RESET = process.argv.includes("--reset") || VERTICAL !== null;
 
 const children = [];
 let shuttingDown = false;
@@ -221,6 +233,8 @@ async function main() {
     STATIC_DIR,
   };
   delete apiEnv.VITE_CLERK_PUBLISHABLE_KEY;
+  if (VERTICAL === "home_services") apiEnv.LEADSPRINT_DEMO_VERTICAL = "home_services";
+  else delete apiEnv.LEADSPRINT_DEMO_VERTICAL;
 
   log("api", `starting LeadSprint (API + console) on 127.0.0.1:${DEMO_PORT} …`);
   track("api-server", spawn(process.execPath, ["--enable-source-maps", path.join(REPO_ROOT, "artifacts/api-server/dist/index.mjs")], {

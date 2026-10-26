@@ -56,6 +56,7 @@ import {
 } from "../lib/providers";
 import { evaluateCallPolicy, validateQuietHours } from "../lib/policy";
 import { getProfile, toApiProfile } from "../lib/verticals";
+import { demoVerticalIsHomeServices, seedHomeServicesDemo } from "../lib/demoSeedHomeServices";
 import { normalizePhone, samePhone, suppressContact } from "../lib/suppression";
 import { timezoneForUSPhoneNumber } from "../lib/areaCodeTimezones";
 import {
@@ -150,6 +151,12 @@ function scopedBusinessId(req: { leadSprintBusinessId?: string }): string {
 }
 
 async function ensureSeedData(): Promise<void> {
+  // `pnpm demo --vertical home_services` seeds the trades demo instead of the
+  // real-estate one. Same gate as below: only runs where demo seeding does.
+  if (demoVerticalIsHomeServices()) {
+    await seedHomeServicesDemo(db, { businessId: BUSINESS_ID, userId: USER_ID });
+    return;
+  }
   let [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, BUSINESS_ID));
   if (!business) {
     await db.insert(businessesTable).values({

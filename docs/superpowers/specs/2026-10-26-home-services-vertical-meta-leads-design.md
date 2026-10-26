@@ -241,3 +241,39 @@ Zapier/Make connection following `docs/meta-lead-ads.md`.
 - Emergency alerts depend on SMTP being configured; SMS alerts are a later piece.
 - One Cal.com event type per workspace limits clients who want separate AC and plumbing
   calendars until piece 5.
+
+## 10. As built: decisions the implementation made
+
+Recorded after the build so the spec matches the code.
+
+- **`record_qualification` tells the agent about coverage.** It returns
+  `{ updated, in_service_area }` and, when the ZIP is outside the service area, flags
+  the lead ("Out of service area — review") and records an activity. This replaces
+  leaving that judgement to the model (§5.6).
+- **Per-call variables are built in one place** (`lib/callVariables.ts`) and sent for
+  both verticals. The customer's phone and email are never included, values are
+  string-only and capped at 1000 characters, and they are read *before* the
+  "uncertain" zone of the dispatcher so a failed read is not mistaken for a placed call.
+  The no-pricing-policy fallback is the speakable sentence "A technician will confirm
+  the cost on site."
+- **Agent files are tied to code by tests** (`agentDefinitions.test.ts`): every
+  `{{placeholder}}` must be a variable the app sends, tool URLs must be real endpoints,
+  `record_qualification` parameters must equal the profile's fields and enum values.
+  This also verifies the existing real-estate agent.
+- **Schema drift guard.** `testDb.ts` DDL is hand-written, so a parity test compares it
+  with the real migrations for the touched tables.
+- **Console.** Real estate keeps its original JSX untouched; other verticals use a
+  separate, profile-driven branch. "Needs consent" replaces "Consent unknown" for
+  non-real-estate workspaces only. The manual add-lead form hides property, budget and
+  timeline for other verticals (CSV import and manual add of home-services details are
+  not part of this piece). CSV export gains Urgency and Details columns for other
+  verticals only. Lead search also matches text held in `details`.
+- **Settings.** Industry is always selectable; the alert email, service-area ZIPs and
+  pricing wording appear for non-real-estate workspaces.
+- **Demo.** `pnpm demo --vertical home_services` always starts from a fresh database
+  (a different vertical needs a different seed). The seed is idempotent and gated by the
+  same non-production check as the real-estate seed.
+- **Emergency phrases.** `smell gas`, `smells like gas`, `smell of gas` and `pipe burst`
+  were added to the spec's list after a test showed "I can smell gas" was missed.
+- **Intake status codes** are unchanged: `201` for a new lead, `200` for a duplicate or
+  a consent revocation. The response gains `urgency`.
