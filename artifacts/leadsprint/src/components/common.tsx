@@ -115,10 +115,10 @@ export function ErrorState({ retry }: { retry?: () => void }) {
   );
 }
 
-export function ConsentBadge({ status }: { status?: string }) {
+export function ConsentBadge({ status, unknownLabel = 'Consent unknown' }: { status?: string; unknownLabel?: string }) {
   if (status === 'valid') return <Badge className="bg-[#d7e9df] text-[#24634f]">Consent on file</Badge>;
   if (status === 'revoked') return <Badge className="bg-[#f7d6c7] text-[#8d371f]">Consent revoked</Badge>;
-  return <Badge className="bg-[#f5e6b6] text-[#745817]">Consent unknown</Badge>;
+  return <Badge className="bg-[#f5e6b6] text-[#745817]">{unknownLabel}</Badge>;
 }
 
 export function Info({ label, value }: { label: string; value: string }) {
