@@ -356,3 +356,44 @@ describe("emergency alerts", () => {
     expect(sendAlert).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("per-call variables sent to Retell", () => {
+  it("a home-services lead reaches Retell with its job details", async () => {
+    await intake(metaLead());
+    expect(startRetellCall).toHaveBeenCalledTimes(1);
+    const sent = startRetellCall.mock.calls[0]?.[0];
+    expect(sent?.dynamicVariables).toMatchObject({
+      business_name: "Frostline HVAC",
+      lead_name: "Dana Reyes",
+      service_type: "AC repair",
+      problem: "AC not cooling",
+      zip: "78701",
+      urgency: "This week",
+      appointment_label: "Service visit",
+    });
+    expect(sent?.dynamicVariables?.recording_clause).toBeDefined();
+    // The customer's number is the dial target, never a prompt variable.
+    expect(JSON.stringify(sent?.dynamicVariables)).not.toContain("+1512555");
+  });
+
+  it("a real-estate lead now gets the placeholders its prompt already expects", async () => {
+    await db.update(businessesTable).set({ vertical: "real_estate", name: "Northstar Realty" }).where(eq(businessesTable.id, BUSINESS_ID));
+    await intake({ name: "Pat Buyer", phone: nextPhone(), ...consent, project: "Spring buyer campaign" });
+    const sent = startRetellCall.mock.calls[0]?.[0];
+    expect(sent?.dynamicVariables).toMatchObject({
+      business_name: "Northstar Realty",
+      lead_name: "Pat Buyer",
+      project_name: "Spring buyer campaign",
+      appointment_label: "Viewing",
+    });
+    expect(sent?.dynamicVariables).not.toHaveProperty("problem");
+  });
+
+  it("keeps the existing metadata that the agent tools and webhooks rely on", async () => {
+    await intake(metaLead());
+    const sent = startRetellCall.mock.calls[0]?.[0];
+    expect(sent?.metadata).toMatchObject({ business_id: BUSINESS_ID });
+    expect(sent?.metadata.lead_id).toMatch(/^lead_/);
+    expect(sent?.metadata.call_id).toMatch(/^call_/);
+  });
+});

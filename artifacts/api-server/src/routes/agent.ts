@@ -10,6 +10,7 @@ import {
   leadsTable,
 } from "@workspace/db";
 import { suppressContact } from "../lib/suppression";
+import { extractProfileDetails, getProfile, isOutOfArea } from "../lib/verticals";
 import { AgentAuthError, parseAgentToolRequest } from "../lib/agentAuth";
 import {
   AvailabilityError,
@@ -213,10 +214,30 @@ router.post("/agent/message", async (req, res): Promise<void> => {
 router.post("/agent/qualify", async (req, res): Promise<void> => {
   const { businessId, leadId, args } = toolContext(req);
   const updates: Partial<typeof leadsTable.$inferInsert> = { updatedAt: new Date() };
-  if (typeof args.location === "string") updates.location = args.location;
-  if (typeof args.property_type === "string") updates.propertyType = args.property_type;
-  if (typeof args.budget_label === "string") updates.budgetLabel = args.budget_label;
-  if (typeof args.timeline === "string") updates.timeline = args.timeline;
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId));
+  const profile = getProfile(business?.vertical);
+  const isRealEstate = profile.id === "real_estate";
+  // Real estate keeps writing its four legacy columns exactly as before.
+  if (isRealEstate && typeof args.location === "string") updates.location = args.location;
+  if (isRealEstate && typeof args.property_type === "string") updates.propertyType = args.property_type;
+  if (isRealEstate && typeof args.budget_label === "string") updates.budgetLabel = args.budget_label;
+  if (isRealEstate && typeof args.timeline === "string") updates.timeline = args.timeline;
+  // Other industries store their answers in `details` (merged into what intake
+  // already captured) and urgency in its own column, and the tool tells the
+  // agent whether the address is inside the service area.
+  let inServiceArea = true;
+  if (!isRealEstate) {
+    const [current] = await db
+      .select({ details: leadsTable.details })
+      .from(leadsTable)
+      .where(and(eq(leadsTable.id, leadId), eq(leadsTable.businessId, businessId)));
+    const extracted = extractProfileDetails(profile, args);
+    const merged = { ...(current?.details ?? {}), ...extracted.details };
+    updates.details = merged;
+    if (extracted.urgency) updates.urgency = extracted.urgency;
+    inServiceArea = !isOutOfArea(business?.serviceAreaZips ?? [], merged);
+    if (!inServiceArea) updates.nextAction = "Out of service area — review";
+  }
   if (typeof args.qualification_status === "string") updates.qualificationStatus = args.qualification_status;
   if (typeof args.intent_score === "number") updates.intentScore = Math.max(0, Math.min(100, Math.round(args.intent_score)));
   // Qualifying a lead is a meaningful business-state transition, not just
@@ -230,7 +251,16 @@ router.post("/agent/qualify", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Lead not found" });
     return;
   }
-  res.status(200).json({ updated: true });
+  if (!inServiceArea) {
+    await db.insert(activitiesTable).values({
+      id: id("activity"),
+      businessId,
+      type: "intake",
+      title: "Lead confirmed outside the service area",
+      detail: "The caller's ZIP is not in this business's service area. The lead is flagged for review.",
+    });
+  }
+  res.status(200).json({ updated: true, in_service_area: inServiceArea });
 });
 
 export default router;
