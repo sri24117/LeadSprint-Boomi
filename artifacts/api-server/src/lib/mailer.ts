@@ -101,6 +101,25 @@ export async function sendOpsAlertEmail(subject: string, lines: string[]): Promi
 }
 
 /**
+ * Emails one business's own alert address (for example an instant
+ * emergency-lead notice). Unlike sendOpsAlertEmail, the recipient is the
+ * client's, not the operator's. Returns `false` when there is nowhere to send
+ * it (no SMTP, or no recipient). A transport failure is thrown: the caller
+ * decides that an alert failing must never fail the request that caused it.
+ * Lines carry customer-supplied text, so the HTML part is escaped.
+ */
+export async function sendBusinessAlertEmail(to: string, subject: string, lines: string[]): Promise<boolean> {
+  if (!to.trim() || !smtpConfigured()) return false;
+  const from = env("SMTP_FROM") ?? env("SMTP_USER")!;
+  const text = lines.join("\n");
+  const html = `<div style="font-family: -apple-system, Arial, sans-serif;">${lines
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("")}</div>`;
+  await transporter().sendMail({ from, to: to.trim(), subject, text, html });
+  return true;
+}
+
+/**
  * Sends the weekly pilot report by email if SMTP is configured. Returns
  * `false` (not an error) when SMTP isn't set up yet, so this can be called
  * unconditionally from a scheduled job during Phase 1 while email delivery
