@@ -30,6 +30,17 @@ export const businessesTable = pgTable("businesses", {
   escalationRules: text("escalation_rules").notNull().default("Transfer questions outside approved business information to a human."),
   calEventTypeId: text("cal_event_type_id"),
   retellAgentId: text("retell_agent_id"),
+  // Which industry profile this workspace runs (see the api-server's
+  // lib/verticals). Real estate is the original behaviour and the default.
+  vertical: text("vertical").notNull().default("real_estate"),
+  // Where instant emergency-lead emails go (home services). Optional.
+  notifyEmail: text("notify_email"),
+  // ZIP entries the business serves: exact 5-digit ZIPs or 3-4 digit
+  // prefixes. Empty means "no service-area check".
+  serviceAreaZips: jsonb("service_area_zips").$type<string[]>().notNull().default([]),
+  // Exact wording the voice agent may use about cost (e.g. a diagnostic fee).
+  // When unset the agent says a technician will confirm the cost.
+  pricingPolicy: text("pricing_policy"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
@@ -61,6 +72,9 @@ export const contactsTable = pgTable("contacts", {
   // when it was captured. Both are required before consent may be "valid".
   consentSource: text("consent_source"),
   consentAt: timestamp("consent_at", { withTimezone: true }),
+  // The consent wording the person actually saw (for example a Meta lead
+  // form's disclaimer), kept as evidence alongside the source and time.
+  consentEvidence: text("consent_evidence"),
   suppressedAt: timestamp("suppressed_at", { withTimezone: true }),
   // Called-party IANA timezone, derived from the phone number's area code
   // at intake (see lib/areaCodeTimezones.ts). NULL means "we couldn't
@@ -88,6 +102,12 @@ export const leadsTable = pgTable("leads", {
   score: text("score").notNull().default("warm"),
   nextAction: text("next_action").notNull().default("Call lead"),
   status: text("status").notNull().default("new"),
+  // Industry-specific answers (service type, problem, ZIP...). The keys come
+  // from the workspace's vertical profile; real estate keeps using the legacy
+  // columns above and leaves this empty.
+  details: jsonb("details").$type<Record<string, string | number | boolean>>().notNull().default({}),
+  // Kept as a column (not inside `details`) so it can be filtered and sorted.
+  urgency: text("urgency"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

@@ -34,6 +34,10 @@ CREATE TABLE businesses (
   escalation_rules text NOT NULL DEFAULT 'Transfer questions outside approved business information to a human.',
   cal_event_type_id text,
   retell_agent_id text,
+  vertical text NOT NULL DEFAULT 'real_estate',
+  notify_email text,
+  service_area_zips jsonb NOT NULL DEFAULT '[]'::jsonb,
+  pricing_policy text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -55,6 +59,7 @@ CREATE TABLE contacts (
   consent_status text NOT NULL DEFAULT 'unknown',
   consent_source text,
   consent_at timestamptz,
+  consent_evidence text,
   suppressed_at timestamptz,
   timezone text
 );
@@ -76,6 +81,8 @@ CREATE TABLE leads (
   score text NOT NULL DEFAULT 'warm',
   next_action text NOT NULL DEFAULT 'Call lead',
   status text NOT NULL DEFAULT 'new',
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  urgency text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
