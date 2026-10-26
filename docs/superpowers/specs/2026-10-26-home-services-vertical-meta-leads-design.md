@@ -121,8 +121,11 @@ behave exactly as today.
 **Urgency.** `classifyUrgency(profile, { urgency, problem })` returns one of
 `emergency`, `same_day`, `this_week`, `quote`. A supplied valid `urgency` wins. Otherwise
 it is `emergency` when `problem` contains any profile `emergencyKeywords` (case-insensitive:
-`gas smell`, `gas leak`, `carbon monoxide`, `burst pipe`, `flooding`, `sewage`,
-`no water`, `sparks`, `burning smell`), else `this_week`.
+`gas smell`, `gas leak`, `smell gas`, `smells like gas`, `smell of gas`,
+`carbon monoxide`, `burst pipe`, `pipe burst`, `flooding`, `sewage`, `no water`,
+`sparks`, `burning smell`), else `this_week`. Both word orders are listed because
+people say "smell gas" as often as "gas smell"; this was found by a test during
+implementation.
 
 **Service area.** If the business has a non-empty `service_area_zips` and the lead
 supplies a ZIP (`details.zip`, or the first 5-digit sequence in `details.address`) that
@@ -141,6 +144,13 @@ activity is recorded. If no ZIP is supplied, the call proceeds and the agent ask
   Content is HTML-escaped. A failed send is logged and never fails or delays intake.
 
 ### 5.6 Voice agent
+
+**Finding that changes the work.** Today `startRetellCall` sends only `metadata` to
+Retell. It never sends `retell_llm_dynamic_variables`, so placeholders such as
+`{{lead_name}}` and `{{project_name}}` in the existing agent prompt are never filled
+per call. This applies to real estate as well. This piece therefore adds a
+`buildCallVariables` function and sends its result as `retell_llm_dynamic_variables`
+for both verticals (additive: the request gains one field and nothing is removed).
 
 New `docs/retell-agent-home-services.json` and `.md` (same tool set as the existing
 agent, including `opt_out`). Per-call prompt variables are built from the lead's
