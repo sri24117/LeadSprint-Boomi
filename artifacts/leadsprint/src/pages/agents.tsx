@@ -3,19 +3,27 @@ import { Link } from 'wouter';
 import {
   Bot,
   Copy,
-  ExternalLink,
   Filter,
-  MoreVertical,
   Pause,
-  Pencil,
   Play,
   Plus,
   RefreshCw,
   Search,
-  Sparkles,
   Volume2,
 } from 'lucide-react';
-import { Badge, Button } from '@/components/common';
+import {
+  Badge,
+  Button,
+  PageHeader,
+  Section,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/common';
 
 interface RetellAgentItem {
   name: string;
@@ -122,254 +130,221 @@ export default function AgentsPage() {
       agent.businessType.toLowerCase().includes(search.toLowerCase()) ||
       agent.voice.toLowerCase().includes(search.toLowerCase()) ||
       agent.id.toLowerCase().includes(search.toLowerCase());
-    const matchesLang =
-      selectedLanguage === 'all' || agent.languages.includes(selectedLanguage);
-    const matchesStatus =
-      selectedStatus === 'all' || agent.status === selectedStatus;
+    const matchesLang = selectedLanguage === 'all' || agent.languages.includes(selectedLanguage);
+    const matchesStatus = selectedStatus === 'all' || agent.status === selectedStatus;
     return matchesSearch && matchesLang && matchesStatus;
   });
 
   return (
     <div className="animate-rise-in space-y-6">
-      {/* Top Banner Card */}
-      <div className="relative overflow-hidden rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50/80 via-purple-50/50 to-indigo-50/70 p-6 shadow-sm">
-        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <div className="max-w-2xl">
-            <h2 className="text-base font-semibold text-slate-800">
-              Conversational Voice Workforce
-            </h2>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">
-              Configure, duplicate, pause, or deploy conversational agents across standard business profiles.
-              Agents are linked to Retell AI telephony and operate under verified TCPA compliance gates.
-            </p>
-          </div>
+      <PageHeader
+        eyebrow="Console"
+        title="AI Agents"
+        description="Configure, duplicate, pause, or deploy conversational agents across standard business profiles."
+        action={
           <Link
             href="/workspace/agent-builder"
-            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 active:scale-95"
+            className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-3.5 py-2 text-sm font-bold text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))/90]"
             data-testid="button-open-builder"
           >
-            <Plus size={16} />
-            <span>Agent Builder</span>
+            <Plus size={15} />
+            Agent builder
           </Link>
-        </div>
-      </div>
+        }
+      />
 
-      {/* Search & Filters */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
-          <Search
-            size={16}
-            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
-          />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search agents by name, type, or voice..."
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-800 placeholder-slate-400 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
-            data-testid="input-search-agents"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={selectedLanguage}
-            onChange={(e) => setSelectedLanguage(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
-            data-testid="select-language"
-          >
-            <option value="all">All Languages</option>
-            <option value="English">English</option>
-            <option value="Spanish">Spanish</option>
-          </select>
-
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
-            data-testid="select-status"
-          >
-            <option value="all">All Statuses</option>
-            <option value="active">Active</option>
-            <option value="paused">Paused</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Existing Retell AI Agents Card */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs">
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+      <Section>
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Existing Retell AI Agents
-            </h3>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <h3 className="font-bold text-[hsl(var(--foreground))]">Existing Retell AI Agents</h3>
+            <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
               Read-only list from the configured Retell account. Linking changes only the local application mapping and requires an organization owner or administrator.
             </p>
           </div>
-          <button
+          <Button
             onClick={handleRefresh}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 active:scale-95"
             data-testid="button-refresh-retell"
+            className="px-3 py-2 text-sm"
           >
-            <RefreshCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
+            {isRefreshing ? <RefreshCw size={13} className="animate-spin" /> : <RefreshCw size={13} />}
             <span>Refresh</span>
-          </button>
+          </Button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-6 py-3">Retell Agent</th>
-                <th className="px-6 py-3">Retell Agent ID</th>
-                <th className="px-6 py-3">Channel</th>
-                <th className="px-6 py-3">Application Mapping</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
+        <div className="mt-4">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[30%]">Retell agent</TableHead>
+                <TableHead className="w-[30%]">Retell agent ID</TableHead>
+                <TableHead className="w-[15%]">Channel</TableHead>
+                <TableHead>Application mapping</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {INITIAL_RETELL_AGENTS.map((item) => (
-                <tr key={item.id} className="transition hover:bg-slate-50/60">
-                  <td className="px-6 py-4 font-semibold text-slate-800">
-                    {item.name}
-                  </td>
-                  <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                    {item.id}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                      <Volume2 size={12} className="text-slate-500" />
+                <TableRow key={item.id}>
+                  <TableCell className="w-[30%]">
+                    <p className="font-semibold text-[hsl(var(--foreground))]">{item.name}</p>
+                  </TableCell>
+                  <TableCell className="w-[30%]">
+                    <p className="font-mono text-xs text-[hsl(var(--muted-foreground))]">{item.id}</p>
+                  </TableCell>
+                  <TableCell className="w-[15%]">
+                    <span className="inline-flex items-center gap-1.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.4] px-2.5 py-1 text-xs text-[hsl(var(--muted-foreground))]">
+                      <Volume2 size={12} />
                       {item.channel}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 text-xs font-medium text-violet-700">
-                    {item.mapping}
-                  </td>
-                </tr>
+                  </TableCell>
+                  <TableCell>
+                    <p className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{item.mapping}</p>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
-      </div>
+      </Section>
 
-      {/* Local AI Agents Table */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs">
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-            Configured Application Agents
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Agents active in this tenant workspace for handling inbound leads and scheduled outbound qualification calls.
-          </p>
+      <Section
+        title="Configured application agents"
+        description="Agents active in this tenant workspace for handling inbound leads and scheduled outbound qualification calls."
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3.5 top-[50%] -translate-y-[50%] text-[hsl(var(--muted-foreground))]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search agents by name, type, or voice…"
+              className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] pl-10 pr-4 py-2.5 text-sm text-[hsl(var(--foreground))] placeholder-[hsl(var(--muted-foreground))] outline-none focus:border-[hsl(var(--primary))] focus:ring-1 focus:ring-[hsl(var(--primary))]"
+              data-testid="input-search-agents"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              value={selectedLanguage}
+              onChange={(e) => setSelectedLanguage(e.target.value)}
+              data-testid="select-language"
+            >
+              <option value="all">All languages</option>
+              <option value="English">English</option>
+              <option value="Spanish">Spanish</option>
+            </Select>
+            <Select
+              value={selectedStatus}
+              onChange={(e) => setSelectedStatus(e.target.value)}
+              data-testid="select-status"
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+            </Select>
+          </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-6 py-3">Agent Name</th>
-                <th className="px-6 py-3">Business Type</th>
-                <th className="px-6 py-3">Languages</th>
-                <th className="px-6 py-3">Voice Configuration</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3">Calls Today</th>
-                <th className="px-6 py-3">Created Date</th>
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
+        <div className="mt-4">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[26%]">Agent</TableHead>
+                <TableHead className="w-[18%]">Business type</TableHead>
+                <TableHead className="w-[14%]">Languages</TableHead>
+                <TableHead className="w-[20%]">Voice configuration</TableHead>
+                <TableHead className="w-[10%]">Status</TableHead>
+                <TableHead className="w-[10%] text-right">Calls today</TableHead>
+                <TableHead className="w-[14%] text-right">Created</TableHead>
+                <TableHead className="w-[16%] text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {filteredAgents.map((agent) => (
-                <tr key={agent.id} className="transition hover:bg-slate-50/60" data-testid={`row-agent-${agent.name}`}>
-                  <td className="px-6 py-4">
+                <TableRow key={agent.id} data-testid={`row-agent-${agent.name}`}>
+                  <TableCell className="w-[26%]">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-700">
-                        <Bot size={18} />
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[hsl(var(--primary))/0.10] text-[hsl(var(--primary))]">
+                        <Bot size={16} />
                       </div>
                       <div>
-                        <span className="font-bold text-slate-800">{agent.name}</span>
-                        <div className="flex items-center gap-1 text-[11px] font-mono text-slate-400">
-                          <span>ID: {agent.id.slice(0, 16)}...</span>
+                        <p className="font-semibold text-[hsl(var(--foreground))]">{agent.name}</p>
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-[hsl(var(--muted-foreground))]">
+                          <span>ID: {agent.id.slice(0, 16)}…</span>
                           <button
                             onClick={() => handleCopy(agent.id)}
-                            title="Copy Agent ID"
-                            className="hover:text-slate-600"
+                            title="Copy agent ID"
+                            className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
                           >
                             <Copy size={11} />
                           </button>
                         </div>
                       </div>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600 font-medium">{agent.businessType}</td>
-                  <td className="px-6 py-4">
+                  </TableCell>
+                  <TableCell className="w-[18%]">
+                    <p className="text-sm text-[hsl(var(--muted-foreground))] font-medium">{agent.businessType}</p>
+                  </TableCell>
+                  <TableCell className="w-[14%]">
                     <div className="flex flex-wrap gap-1">
                       {agent.languages.map((lang) => (
-                        <span
-                          key={lang}
-                          className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600"
-                        >
+                        <span key={lang} className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.4] px-2 py-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
                           {lang}
                         </span>
                       ))}
                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <p className="font-medium text-slate-800">{agent.voice}</p>
-                    <p className="text-xs text-slate-400">{agent.voiceProvider}</p>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                        agent.status === 'active'
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-slate-100 text-slate-600 border border-slate-200'
-                      }`}
-                    >
+                  </TableCell>
+                  <TableCell className="w-[20%]">
+                    <p className="font-medium text-[hsl(var(--foreground))]">{agent.voice}</p>
+                    <p className="mt-0.5 text-[11px] text-[hsl(var(--muted-foreground))]">{agent.voiceProvider}</p>
+                  </TableCell>
+                  <TableCell className="w-[10%]">
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold border ${agent.status === 'active' ? 'border-[#8fc7a8]/55 bg-[#eff7f2] text-[#2f6b49]' : 'border-[#e2e8f0]/55 bg-[#f8fafc] text-[#475569]'}`}>
                       <span
                         className={`h-1.5 w-1.5 rounded-full ${
-                          agent.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                          agent.status === 'active'
+                            ? 'bg-[hsl(var(--success))]'
+                            : 'bg-[hsl(var(--muted-foreground))]'
                         }`}
                       />
                       {agent.status === 'active' ? 'Active' : 'Paused'}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 font-mono font-semibold text-slate-700">
-                    {agent.callsToday}
-                  </td>
-                  <td className="px-6 py-4 text-xs font-mono text-slate-500">
-                    {agent.createdDate}
-                  </td>
-                  <td className="px-6 py-4 text-right">
+                  </TableCell>
+                  <TableCell className="w-[10%] text-right">
+                    <p className="font-mono text-xs font-semibold text-[hsl(var(--foreground))]">{agent.callsToday}</p>
+                  </TableCell>
+                  <TableCell className="w-[14%] text-right">
+                    <p className="text-[11px] font-mono text-[hsl(var(--muted-foreground))]">{agent.createdDate}</p>
+                  </TableCell>
+                  <TableCell className="w-[16%] text-right">
                     <div className="flex items-center justify-end gap-1.5">
                       <Link
                         href={`/workspace/agent-builder?id=${agent.id}`}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                         data-testid={`button-edit-agent-${agent.name}`}
                       >
-                        <Pencil size={12} />
-                        <span>Edit</span>
+                        Edit
                       </Link>
                       <button
                         onClick={() => handleToggleStatus(agent.id)}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1 text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))]"
                         data-testid={`button-toggle-agent-${agent.name}`}
                       >
                         {agent.status === 'active' ? 'Pause' : 'Resume'}
                       </button>
                       <button
                         onClick={() => handleCopy(agent.id)}
-                        className="rounded-lg border border-slate-200 p-1 text-slate-600 transition hover:bg-slate-50"
-                        title="Copy Config"
+                        className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]" title="Copy config"
                       >
                         <Copy size={13} />
                       </button>
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
-      </div>
+      </Section>
     </div>
   );
 }

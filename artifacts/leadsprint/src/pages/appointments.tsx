@@ -5,8 +5,15 @@ import {
   Badge,
   EmptyState,
   ErrorState,
-  Info,
+  PageHeader,
+  Section,
   Skeleton,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
   formatDate,
   formatTime,
   statusTone,
@@ -17,23 +24,34 @@ export default function AppointmentsPage() {
 
   if (appointments.isLoading) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-5">
+        <PageHeader eyebrow="Console" title="Appointments" />
         {[1, 2, 3].map((n) => (
-          <Skeleton key={n} className="h-24" />
+          <Skeleton key={n} className="h-10 w-full" />
         ))}
       </div>
     );
   }
 
   if (appointments.isError) {
-    return <ErrorState retry={() => appointments.refetch()} />;
+    return (
+      <div className="space-y-5">
+        <PageHeader eyebrow="Console" title="Appointments" />
+        <ErrorState retry={() => appointments.refetch()} />
+      </div>
+    );
   }
 
   return (
     <div className="animate-rise-in space-y-6">
-      <div>
-        <p className="text-sm text-muted-foreground">Every row below has a source lead and a calendar confirmation.</p>
-      </div>
+      <PageHeader
+        eyebrow="Console"
+        title="Appointments"
+        description="Verified meetings, ready for the team."
+      />
+      <p className="text-sm text-[hsl(var(--muted-foreground))]">
+        Every row below has a source lead and a calendar confirmation.
+      </p>
 
       {!appointments.data?.length ? (
         <EmptyState
@@ -42,43 +60,76 @@ export default function AppointmentsPage() {
           description="Once a lead books through the approved calendar, it will be visible here."
         />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {appointments.data.map((appointment) => (
-            <div
-              key={appointment.id}
-              className="rounded-xl border border-border bg-[hsl(var(--card))] p-5 transition hover:-translate-y-0.5 hover:shadow-[0_8px_24px_hsl(209_43%_22%/.08)]"
-              data-testid={`card-appointment-${appointment.id}`}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(var(--accent)/.11)] font-mono text-xs font-bold text-[hsl(var(--accent))]">
-                    {formatTime(appointment.start_time)}
-                  </div>
-                  <div>
-                    <h3 className="font-bold">{appointment.lead_name}</h3>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{appointment.service_or_property}</p>
-                  </div>
-                </div>
-                <Badge className={statusTone(appointment.status)}>{appointment.status}</Badge>
-              </div>
-
-              <div className="mt-5 grid grid-cols-2 gap-y-3 border-t border-border pt-4 text-sm">
-                <Info label="Date" value={formatDate(appointment.start_time)} />
-                <Info label="Timezone" value={appointment.timezone} />
-                <Info label="Calendar" value={appointment.calendar_provider} />
-                <Info label="External ID" value={appointment.external_id} />
-              </div>
-
-              <Link
-                href="/workspace/leads"
-                className="mt-5 inline-flex items-center gap-1 text-xs font-bold text-[hsl(var(--accent))]"
-                data-testid={`link-source-lead-${appointment.id}`}
-              >
-                Open source lead <ChevronRight size={13} />
-              </Link>
-            </div>
-          ))}
-        </div>
+        <Section>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[30%]">Lead &amp; property</TableHead>
+                <TableHead className="w-[17%] text-right">Date &amp; time</TableHead>
+                <TableHead className="w-[14%]">Timezone</TableHead>
+                <TableHead className="w-[16%]">Calendar</TableHead>
+                <TableHead className="w-[13%]">External ID</TableHead>
+                <TableHead className="w-[10%] text-right">Status</TableHead>
+                <TableHead className="w-[12%] text-right" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {appointments.data.map((appointment) => (
+                <TableRow key={appointment.id} data-testid={`row-appointment-${appointment.id}`}>
+                  <TableCell className="w-[30%]">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[hsl(var(--primary))/0.10] font-mono text-xs font-bold text-[hsl(var(--primary))]">
+                        {formatTime(appointment.start_time)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-[hsl(var(--foreground))]">
+                          {appointment.lead_name}
+                        </p>
+                        <p className="truncate text-xs text-[hsl(var(--muted-foreground))]">
+                          {appointment.service_or_property}
+                        </p>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="w-[17%] text-right">
+                    <p className="text-sm font-semibold text-[hsl(var(--foreground))] font-mono">
+                      {formatDate(appointment.start_time)}
+                    </p>
+                  </TableCell>
+                  <TableCell className="w-[14%]">
+                    <p className="text-sm text-[hsl(var(--muted-foreground))] font-mono">
+                      {appointment.timezone}
+                    </p>
+                  </TableCell>
+                  <TableCell className="w-[16%]">
+                    <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                      {appointment.calendar_provider}
+                    </p>
+                  </TableCell>
+                  <TableCell className="w-[13%]">
+                    <p className="text-xs font-mono text-[hsl(var(--muted-foreground))] truncate max-w-xs">
+                      {appointment.external_id}
+                    </p>
+                  </TableCell>
+                  <TableCell className="w-[10%] text-right">
+                    <Badge className={statusTone(appointment.status)}>
+                      {appointment.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="w-[12%] text-right">
+                    <Link
+                      href="/workspace/leads"
+                      className="text-xs font-bold text-[hsl(var(--primary))] hover:underline"
+                      data-testid={`link-source-lead-${appointment.id}`}
+                    >
+                      Open source lead <ChevronRight size={13} />
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Section>
       )}
     </div>
   );

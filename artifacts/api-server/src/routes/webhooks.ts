@@ -510,7 +510,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
       terminal &&
       disconnectionReason != null &&
       missedCallReasons.includes(disconnectionReason) &&
-      callRow != null;
+      callBefore != null;
 
     if (wasMissedCall) {
       // Fetch the contact's phone and the business project name so the SMS
@@ -518,7 +518,7 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
       const [contactRow] = await db
         .select({ phone: contactsTable.phone, name: contactsTable.name })
         .from(contactsTable)
-        .where(and(eq(contactsTable.id, callRow!.contactId), eq(contactsTable.businessId, businessId)))
+        .where(and(eq(contactsTable.id, callBefore!.contactId), eq(contactsTable.businessId, businessId)))
         .limit(1);
       const [businessRow] = await db
         .select({ projectName: businessesTable.projectName, market: businessesTable.market })

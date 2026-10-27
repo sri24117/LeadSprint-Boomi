@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Bot,
   CheckCircle2,
-  ChevronRight,
   Headphones,
   Mic,
   Play,
@@ -16,7 +15,7 @@ import {
   Volume2,
   Wand2,
 } from 'lucide-react';
-import { Button } from '@/components/common';
+import { Button, Input, PageHeader, Section, SectionBody, Select, TextArea } from '@/components/common';
 
 export default function AgentBuilderPage() {
   const [name, setName] = useState('sara');
@@ -92,91 +91,69 @@ SAFETY RULES:
 
   return (
     <div className="animate-rise-in space-y-6">
-      {/* Header bar */}
-      <div className="flex flex-col justify-between gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-center">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/workspace/agents"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-xs transition hover:bg-slate-50"
-            data-testid="link-back-agents"
-          >
-            <ArrowLeft size={16} />
-          </Link>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-800">Agent Studio: {name}</h1>
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
-                Live on Retell
-              </span>
-            </div>
-            <p className="text-xs text-slate-500">
-              Configure system prompt, telephony parameters, and test conversation logic.
-            </p>
+      <PageHeader
+        eyebrow="Console / AI agents"
+        title="Agent builder"
+        description="Design conversational prompts, voices, LLM parameters, and tool integrations."
+        action={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={playVoiceSample}
+              className="inline-flex items-center gap-2 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs font-semibold text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
+              data-testid="button-voice-sample"
+            >
+              <Volume2 size={15} className={isPlayingVoice ? 'text-[hsl(var(--primary))] animate-pulse-dot' : 'text-[hsl(var(--muted-foreground))]'}/>
+              <span>{isPlayingVoice ? 'Speaking…' : 'Test voice audio'}</span>
+            </button>
+            <button
+              onClick={handleSave}
+              className="inline-flex items-center gap-2 rounded-md bg-[hsl(var(--primary))] px-3.5 py-2 text-xs font-bold text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))/90]"
+              data-testid="button-save-agent"
+            >
+              {isSaved ? <CheckCircle2 size={15} /> : <Save size={15} />}
+              <span>{isSaved ? 'Deployed to Retell' : 'Save &amp; deploy'}</span>
+            </button>
           </div>
-        </div>
+        }
+      />
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={playVoiceSample}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50"
-            data-testid="button-voice-sample"
-          >
-            <Volume2 size={15} className={isPlayingVoice ? 'text-violet-600 animate-pulse' : 'text-slate-500'} />
-            <span>{isPlayingVoice ? 'Speaking…' : 'Test Voice Audio'}</span>
-          </button>
-          <button
-            onClick={handleSave}
-            className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-violet-700 active:scale-95"
-            data-testid="button-save-agent"
-          >
-            {isSaved ? <CheckCircle2 size={15} /> : <Save size={15} />}
-            <span>{isSaved ? 'Deployed to Retell' : 'Save & Deploy'}</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-12">
+      <div className="grid gap-5 lg:grid-cols-12">
         {/* Left Column: Configuration Forms */}
-        <div className="space-y-6 lg:col-span-7">
-          {/* Voice & Personality Card */}
-          <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-xs">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-800">
-              <Sliders size={16} className="text-violet-600" />
-              <span>Voice & Acoustic Model</span>
-            </h2>
-
+        <div className="space-y-5 lg:col-span-7">
+          <Section
+            title="Voice &amp; acoustic model"
+            description="Choose the voice persona, synthesis engine, and speaking parameters."
+          >
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Voice Persona</label>
-                <select
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Voice persona</label>
+                <Select
                   value={voice}
                   onChange={(e) => setVoice(e.target.value)}
-                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  className="w-full"
                 >
-                  <option value="Aura-Asteria">Aura-Asteria (Warm & Engaging)</option>
-                  <option value="Aura-Orion">Aura-Orion (Calm & Professional)</option>
+                  <option value="Aura-Asteria">Aura-Asteria (warm &amp; engaging)</option>
+                  <option value="Aura-Orion">Aura-Orion (calm &amp; professional)</option>
                   <option value="Rachel-ElevenLabs">Rachel (ElevenLabs Turbo v2)</option>
                   <option value="Nova-OpenAI">Nova (OpenAI Realtime)</option>
-                </select>
+                </Select>
               </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Voice Synthesis Engine</label>
-                <select
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Voice synthesis engine</label>
+                <Select
                   value={provider}
                   onChange={(e) => setProvider(e.target.value)}
-                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  className="w-full"
                 >
-                  <option value="Deepgram">Deepgram (Ultra-low latency, &lt;300ms)</option>
-                  <option value="ElevenLabs">ElevenLabs (High expressive nuance)</option>
-                  <option value="Cartesia">Cartesia Sonic (Fast conversational)</option>
-                </select>
+                  <option value="Deepgram">Deepgram (ultra-low latency, &lt;300ms)</option>
+                  <option value="ElevenLabs">ElevenLabs (high expressive nuance)</option>
+                  <option value="Cartesia">Cartesia Sonic (fast conversational)</option>
+                </Select>
               </div>
-
-              <div>
-                <div className="flex justify-between text-xs font-semibold text-slate-700">
-                  <span>Speech Rate</span>
-                  <span className="font-mono text-violet-600">{speed}x</span>
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex justify-between text-xs font-semibold text-[hsl(var(--muted-foreground))] mb-1">
+                  <span>Speech rate</span>
+                  <span className="font-mono text-[hsl(var(--primary))]">{speed}x</span>
                 </div>
                 <input
                   type="range"
@@ -185,14 +162,14 @@ SAFETY RULES:
                   step="0.05"
                   value={speed}
                   onChange={(e) => setSpeed(e.target.value)}
-                  className="mt-2 w-full accent-violet-600"
+                  className="w-full cursor-pointer"
+                  style={{ accentColor: 'hsl(var(--primary))' }}
                 />
               </div>
-
-              <div>
-                <div className="flex justify-between text-xs font-semibold text-slate-700">
-                  <span>Creativity & Temperature</span>
-                  <span className="font-mono text-violet-600">{temperature}</span>
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex justify-between text-xs font-semibold text-[hsl(var(--muted-foreground))] mb-1">
+                  <span>Creativity &amp; temperature</span>
+                  <span className="font-mono text-[hsl(var(--primary))]">{temperature}</span>
                 </div>
                 <input
                   type="range"
@@ -201,67 +178,51 @@ SAFETY RULES:
                   step="0.05"
                   value={temperature}
                   onChange={(e) => setTemperature(e.target.value)}
-                  className="mt-2 w-full accent-violet-600"
+                  className="w-full cursor-pointer"
+                  style={{ accentColor: 'hsl(var(--primary))' }}
                 />
               </div>
             </div>
-          </div>
+          </Section>
 
-          {/* First Message Card */}
-          <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-xs">
-            <div className="flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                <Volume2 size={16} className="text-violet-600" />
-                <span>First Spoken Greeting</span>
-              </h2>
-              <span className="text-[11px] text-slate-400">Triggered immediately upon phone pickup</span>
-            </div>
-            <textarea
+          <Section title="First spoken greeting" description="Triggered immediately upon phone pickup.">
+            <TextArea
               rows={3}
               value={firstMessage}
               onChange={(e) => setFirstMessage(e.target.value)}
-              className="mt-3 w-full rounded-xl border border-slate-200 p-3.5 text-sm text-slate-800 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+              className="mt-2 w-full"
               placeholder="What should the agent say the moment the lead answers?"
+              data-testid="textarea-first-message"
             />
-          </div>
+          </Section>
 
-          {/* Prompt Instructions */}
-          <div className="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-xs">
-            <div className="flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                <Sparkles size={16} className="text-violet-600" />
-                <span>System Prompt & Qualification Logic</span>
-              </h2>
-              <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
-                GPT-4o Realtime
-              </span>
+          <Section title="System prompt &amp; qualification logic" description="Define the conversation goals, qualification questions, handling for price objections, and safety transfer rules.">
+            <div className="flex items-end gap-2 text-[10px] font-bold uppercase tracking-[.1em] text-[hsl(var(--muted-foreground))] mt-2">
+              <span className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.4] px-2 py-0.5 text-[hsl(var(--muted-foreground))]">GPT-4o Realtime</span>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Define the conversation goals, qualification questions, handling for price objections, and safety transfer rules.
-            </p>
-            <textarea
+            <TextArea
               rows={12}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              className="mt-3 w-full font-mono text-xs leading-relaxed rounded-xl border border-slate-200 p-3.5 text-slate-800 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+              className="mt-2 w-full font-mono text-xs leading-relaxed"
+              data-testid="textarea-system-prompt"
             />
-          </div>
+          </Section>
         </div>
 
         {/* Right Column: Live Testing Simulator */}
-        <div className="space-y-6 lg:col-span-5">
-          <div className="sticky top-24 rounded-2xl border border-slate-200/90 bg-white shadow-xs">
-            {/* Simulator Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 p-4">
+        <div className="space-y-5 lg:col-span-5">
+          <div className="sticky top-[90px] rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))]">
+            <div className="flex items-center justify-between border-b border-[hsl(var(--border))] p-4">
               <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[hsl(var(--primary))/0.10] text-[hsl(var(--primary))]">
                   <Bot size={16} />
                 </div>
                 <div>
-                  <h3 className="text-xs font-bold text-slate-800">Interactive Conversation Sandbox</h3>
-                  <div className="flex items-center gap-1.5 text-[10px] text-emerald-600">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Acoustic Latency: ~280ms</span>
+                  <h3 className="text-xs font-bold text-[hsl(var(--foreground))]">Interactive conversation sandbox</h3>
+                  <div className="flex items-center gap-1.5 text-[10px] text-[hsl(var(--success))]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--success))] animate-pulse-dot" />
+                    <span>Acoustic latency: ~280ms</span>
                   </div>
                 </div>
               </div>
@@ -275,31 +236,27 @@ SAFETY RULES:
                     },
                   ])
                 }
-                title="Reset Conversation"
-                className="rounded-lg border border-slate-200 p-1.5 text-slate-500 transition hover:bg-slate-50"
+                title="Reset conversation"
+                className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
               >
                 <RotateCcw size={14} />
               </button>
             </div>
 
-            {/* Chat Messages */}
-            <div className="h-[430px] overflow-y-auto p-4 space-y-3.5 bg-slate-50/50">
+            <div className="h-[420px] overflow-y-auto p-4 space-y-3.5 bg-[hsl(var(--muted))/0.3]">
               {testMessages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                >
+                <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                   <div className="flex items-center gap-1.5 mb-1 px-1">
-                    <span className="text-[10px] font-semibold text-slate-500">
-                      {msg.role === 'agent' ? 'Sara (AI Voice)' : 'You (Lead)'}
+                    <span className="text-[10px] font-semibold text-[hsl(var(--muted-foreground))]">
+                      {msg.role === 'agent' ? 'Sara (AI voice)' : 'You (lead)'}
                     </span>
-                    <span className="text-[10px] text-slate-400">· {msg.time}</span>
+                    <span className="text-[10px] text-[hsl(var(--muted-foreground))]">· {msg.time}</span>
                   </div>
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed shadow-2xs ${
+                    className={`max-w-[85%] rounded-lg px-3.5 py-2.5 text-xs leading-relaxed ${
                       msg.role === 'agent'
-                        ? 'bg-white border border-slate-200/80 text-slate-800 rounded-tl-sm'
-                        : 'bg-violet-600 text-white rounded-tr-sm'
+                        ? 'border border-[hsl(var(--border))] bg-[hsl(var(--card))] text-[hsl(var(--foreground))]'
+                        : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
                     }`}
                   >
                     {msg.text}
@@ -308,8 +265,7 @@ SAFETY RULES:
               ))}
             </div>
 
-            {/* Chat Input */}
-            <div className="border-t border-slate-100 p-3 bg-white rounded-b-2xl">
+            <div className="border-t border-[hsl(var(--border))] p-3 bg-[hsl(var(--card))]">
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -321,19 +277,19 @@ SAFETY RULES:
                   type="text"
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder="Type a response to test Sara..."
-                  className="flex-1 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  placeholder="Type a response to test Sara…"
+                  className="flex-1 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3.5 py-2 text-xs text-[hsl(var(--foreground))] placeholder-[hsl(var(--muted-foreground))] outline-none focus:border-[hsl(var(--primary))] focus:ring-1 focus:ring-[hsl(var(--primary))]"
                 />
                 <button
                   type="submit"
-                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-600 text-white shadow-xs transition hover:bg-violet-700 active:scale-95"
+                  className="flex h-8 w-8 items-center justify-center rounded-md bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:bg-[hsl(var(--primary))/90]"
                 >
                   <Send size={13} />
                 </button>
               </form>
-              <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400 px-1">
-                <span>Press Enter to send</span>
-                <span className="flex items-center gap-1 text-violet-600 font-medium cursor-pointer hover:underline">
+              <div className="mt-2 flex items-center justify-between text-[11px] text-[hsl(var(--muted-foreground))] px-1">
+                <span>Press enter to send</span>
+                <span className="flex items-center gap-1 text-[hsl(var(--primary))] font-medium cursor-pointer hover:underline">
                   <Mic size={11} /> Speak with microphone
                 </span>
               </div>

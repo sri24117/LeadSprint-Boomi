@@ -1,29 +1,24 @@
 import { useState } from 'react';
-import {
-  Calendar,
-  CheckCircle2,
-  ChevronRight,
-  Compass,
-  DollarSign,
-  Filter,
-  MapPin,
-  MoveRight,
-  Phone,
-  Plus,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  User,
-} from 'lucide-react';
+import { MoveRight, Phone, Search, ShieldCheck } from 'lucide-react';
 import { useGetLeads, useStartCall } from '@workspace/api-client-react';
-import { Badge, Button, EmptyState, ErrorState, Skeleton } from '@/components/common';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Section,
+  Skeleton,
+  Select,
+  scoreTone,
+} from '@/components/common';
 
 const STAGES = [
-  { id: 'new', label: 'New Enquiries', color: 'border-blue-400 bg-blue-50/50' },
-  { id: 'contacted', label: 'Contacted / In Touch', color: 'border-violet-400 bg-violet-50/50' },
-  { id: 'qualified', label: 'AI Qualified', color: 'border-emerald-400 bg-emerald-50/50' },
-  { id: 'booked', label: 'Showing Scheduled', color: 'border-purple-400 bg-purple-50/50' },
-  { id: 'won', label: 'Under Contract / Won', color: 'border-amber-400 bg-amber-50/50' },
+  { id: 'new', label: 'New enquiries' },
+  { id: 'contacted', label: 'Contacted' },
+  { id: 'qualified', label: 'AI qualified' },
+  { id: 'booked', label: 'Showing scheduled' },
+  { id: 'won', label: 'Under contract' },
 ];
 
 export default function CrmPage() {
@@ -42,16 +37,24 @@ export default function CrmPage() {
 
   if (leadsQuery.isLoading) {
     return (
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-5">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <Skeleton key={n} className="h-96 rounded-2xl" />
-        ))}
+      <div className="space-y-5">
+        <PageHeader eyebrow="Console" title="CRM" />
+        <div className="grid gap-4 sm:grid-cols-5">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <Skeleton key={n} className="h-[340px] rounded-lg" />
+          ))}
+        </div>
       </div>
     );
   }
 
   if (leadsQuery.isError) {
-    return <ErrorState retry={() => leadsQuery.refetch()} />;
+    return (
+      <div className="space-y-5">
+        <PageHeader eyebrow="Console" title="CRM" />
+        <ErrorState retry={() => leadsQuery.refetch()} />
+      </div>
+    );
   }
 
   const allLeads = leadsQuery.data || [];
@@ -78,103 +81,87 @@ export default function CrmPage() {
 
   return (
     <div className="animate-rise-in space-y-6">
-      {/* Header filter controls */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+      <PageHeader
+        eyebrow="Console"
+        title="CRM"
+        description="Track leads from incoming enquiry to qualification and booked appointments."
+      />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-md">
-          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={16} className="absolute left-3.5 top-[50%] -translate-y-[50%] text-[hsl(var(--muted-foreground))]" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search CRM pipeline by lead, project, or location..."
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-800 placeholder-slate-400 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+            placeholder="Search pipeline by lead, project, or location…"
+            className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] pl-10 pr-4 py-2.5 text-sm text-[hsl(var(--foreground))] placeholder-[hsl(var(--muted-foreground))] outline-none focus:border-[hsl(var(--primary))] focus:ring-1 focus:ring-[hsl(var(--primary))]"
           />
         </div>
-
-        <div className="flex items-center gap-3">
-          <select
+        <div className="flex items-center gap-2">
+          <Select
             value={filterScore}
             onChange={(e) => setFilterScore(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 shadow-xs focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
           >
-            <option value="all">All Intent Scores</option>
-            <option value="hot">Hot Leads</option>
-            <option value="warm">Warm Leads</option>
-            <option value="cold">Cold Leads</option>
-          </select>
+            <option value="all">All intent scores</option>
+            <option value="hot">Hot leads</option>
+            <option value="warm">Warm leads</option>
+            <option value="cold">Cold leads</option>
+          </Select>
         </div>
       </div>
 
-      {/* Kanban Board Columns */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-5 items-start">
-        {STAGES.map((stage) => {
-          const stageLeads = filteredLeads.filter((l) => getStageForLead(l) === stage.id);
-          return (
-            <div
-              key={stage.id}
-              className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3.5 shadow-2xs"
-            >
-              <div className="flex items-center justify-between px-2 pb-3 border-b border-slate-200/60">
-                <span className="text-xs font-bold text-slate-700">{stage.label}</span>
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 font-mono text-[10px] font-bold text-slate-700">
-                  {stageLeads.length}
-                </span>
-              </div>
-
-              <div className="mt-3.5 space-y-3 min-h-[350px]">
-                {stageLeads.length === 0 ? (
-                  <div className="flex h-28 items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-400">
-                    No leads in stage
-                  </div>
-                ) : (
-                  stageLeads.map((lead) => (
-                    <div
-                      key={lead.id}
-                      className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition hover:shadow-sm"
-                    >
-                      <div className="flex items-start justify-between">
-                        <span className="font-bold text-sm text-slate-900">{lead.name}</span>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                            lead.score === 'hot'
-                              ? 'bg-red-50 text-red-600 border border-red-200'
-                              : lead.score === 'warm'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          {lead.score}
-                        </span>
-                      </div>
-
-                      <p className="mt-1 text-xs text-slate-500 font-medium">
-                        {lead.property_type} · {lead.location}
-                      </p>
-
-                      <div className="mt-2.5 flex items-center justify-between text-xs font-semibold text-slate-700">
-                        <span>{lead.budget_label}</span>
-                        <span className="text-[11px] font-mono text-slate-400">{lead.timeline}</span>
-                      </div>
-
-                      {/* TCPA Safety Badge */}
-                      <div className="mt-3 flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
-                        <ShieldCheck size={11} />
-                        <span>TCPA Consent: Valid</span>
-                      </div>
-
-                      {/* Card Action Controls */}
-                      <div className="mt-3.5 flex items-center justify-between border-t border-slate-100 pt-3">
-                        <button
-                          onClick={() => startCall.mutate({ data: { lead_id: lead.id } })}
-                          disabled={startCall.isPending}
-                          className="inline-flex items-center gap-1 rounded-lg bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100 transition"
-                          title="Call with Sara AI"
-                        >
-                          <Phone size={11} />
-                          <span>Call</span>
-                        </button>
-
-                        <div className="flex items-center gap-1">
+      <Section>
+        <div className="grid gap-4 sm:gap-5 md:grid-cols-5 items-start">
+          {STAGES.map((stage) => {
+            const stageLeads = filteredLeads.filter((l) => getStageForLead(l) === stage.id);
+            return (
+              <div key={stage.id} className="flex flex-col gap-2" data-testid={`column-${stage.id}`}>
+                <div className="flex items-center justify-between gap-2 px-2 py-2">
+                  <span className="text-[10px] font-bold uppercase tracking-[.14em] text-[hsl(var(--muted-foreground))]">
+                    {stage.label}
+                  </span>
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] font-mono text-[10px] font-bold text-[hsl(var(--muted-foreground))]">
+                    {stageLeads.length}
+                  </span>
+                </div>
+                <div className="flex-1 min-h-[320px] flex flex-col gap-2.5 overflow-y-auto p-1.5 [&_*:last-child]:mb-0 scrollbar-subtle">
+                  {stageLeads.length === 0 ? (
+                    <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-[hsl(var(--border))] text-xs text-[hsl(var(--muted-foreground))]">
+                      No leads in stage
+                    </div>
+                  ) : (
+                    stageLeads.map((lead) => (
+                      <div
+                        key={lead.id}
+                        className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3.5 transition hover:border-[hsl(var(--primary))/0.5]"
+                        data-testid={`card-lead-${lead.id}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-semibold text-[hsl(var(--foreground))]">{lead.name}</span>
+                          <Badge className={scoreTone(lead.score)}>{lead.score}</Badge>
+                        </div>
+                        <p className="mt-1.5 text-xs text-[hsl(var(--muted-foreground))] font-medium">
+                          {lead.property_type} · {lead.location}
+                        </p>
+                        <div className="mt-2.5 flex items-center justify-between text-xs text-[hsl(var(--muted-foreground))]">
+                          <span className="font-mono font-semibold">{lead.budget_label}</span>
+                          <span className="font-mono">{lead.timeline}</span>
+                        </div>
+                        <div className="mt-3 flex items-center gap-1.5 rounded-md border border-[hsl(var(--success))/0.35] bg-[hsl(var(--success))/0.08] px-2.5 py-1 text-[10px] font-bold text-[hsl(var(--success))]">
+                          <ShieldCheck size={11} />
+                          <span>TCPA consent valid</span>
+                        </div>
+                        <div className="mt-3.5 flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => startCall.mutate({ data: { lead_id: lead.id } })}
+                            disabled={startCall.isPending}
+                            className="flex items-center gap-1.5 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-2.5 py-1.5 text-xs font-semibold text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))/0.05] disabled:opacity-40"
+                            title="Call with Sara AI"
+                          >
+                            <Phone size={11} />
+                            <span>Call</span>
+                          </button>
                           {stage.id !== 'won' && (
                             <button
                               onClick={() => {
@@ -183,7 +170,7 @@ export default function CrmPage() {
                                   moveStage(lead.id, STAGES[currentIndex + 1].id);
                                 }
                               }}
-                              className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:text-violet-600 hover:border-violet-200 transition"
+                              className="rounded-md p-1.5 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--primary))]"
                               title="Advance to next stage"
                             >
                               <MoveRight size={13} />
@@ -191,14 +178,14 @@ export default function CrmPage() {
                           )}
                         </div>
                       </div>
-                    </div>
-                  ))
-                )}
+                    ))
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </Section>
     </div>
   );
 }

@@ -40,11 +40,21 @@ import { parseLeadCsv } from '@/lib/csv';
 import {
   Badge,
   Button,
+  Checkbox,
   ConsentBadge,
   EmptyState,
   ErrorState,
   Info,
+  Input,
+  PageHeader,
   Skeleton,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
   initials,
   relativeTime,
   scoreTone,
@@ -63,16 +73,14 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
   const [bookDate, setBookDate] = useState(new Date().toISOString().slice(0, 10));
   const [message, setMessage] = useState('');
   const data = lead.data;
-  // The workspace's industry profile. Real estate (and the moment before the
-  // session loads) keeps the original layout below, untouched.
   const session = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
   const profile = session.data?.profile;
   const realEstate = isRealEstateProfile(profile);
 
   if (lead.isLoading) {
     return (
-      <div className="fixed inset-0 z-40 flex justify-end bg-[#102632]/30">
-        <div className="h-full w-full max-w-[540px] bg-[hsl(var(--card))] p-6">
+      <div className="fixed inset-0 z-50 flex justify-end bg-[hsl(var(--foreground))/0.25] backdrop-blur-sm" onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }}>
+        <div className="h-full w-full max-w-[560px] bg-[hsl(var(--card))] border border-[hsl(var(--card-border))] p-6">
           <Skeleton className="h-8 w-1/2" />
           <Skeleton className="mt-8 h-40" />
         </div>
@@ -82,8 +90,8 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
 
   if (lead.isError || !data) {
     return (
-      <div className="fixed inset-0 z-40 flex justify-end bg-[#102632]/30">
-        <div className="h-full w-full max-w-[540px] bg-[hsl(var(--card))] p-6">
+      <div className="fixed inset-0 z-50 flex justify-end bg-[hsl(var(--foreground))/0.25] backdrop-blur-sm" onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }}>
+        <div className="h-full w-full max-w-[560px] bg-[hsl(var(--card))] border border-[hsl(var(--card-border))] p-6">
           <ErrorState retry={() => lead.refetch()} />
           <Button onClick={onClose} data-testid="button-close-lead-error">
             Close
@@ -113,12 +121,7 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
           setMessage('Call queued. Watch Calls for the provider handoff.');
           queryClient.invalidateQueries({ queryKey: getGetCallsQueryKey() });
         },
-        // A blocked attempt comes back as 409 with the reason. Saying
-        // nothing here would leave the operator clicking a button that
-        // appears to do nothing; saying "queued" would be a lie.
         onError: (error) => {
-          // ApiError carries the parsed JSON body on `.data`; the API puts
-          // the operator-readable reason in `error`.
           const detail =
             (error as { data?: { error?: string }; message?: string })?.data?.error ||
             (error as { message?: string })?.message ||
@@ -133,66 +136,71 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
 
   return (
     <div
-      className="fixed inset-0 z-40 flex justify-end bg-[#102632]/30"
+      className="fixed inset-0 z-50 flex justify-end bg-[hsl(var(--foreground))/0.25] backdrop-blur-sm"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onClose();
+      }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="flex h-full w-full max-w-[560px] flex-col overflow-hidden bg-[hsl(var(--card))] shadow-[-20px_0_60px_hsl(209_43%_22%/.16)]">
-        <div className="flex items-start justify-between border-b border-border p-6">
+      <div className="flex h-full w-full max-w-[560px] flex-col overflow-hidden bg-[hsl(var(--card))] border-l border-[hsl(var(--card-border))] shadow-[-20px_0_60px_hsl(0_0%_0%_/_0.10)]">
+        <div className="flex items-start justify-between border-b border-[hsl(var(--border))] p-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[hsl(var(--secondary)/.45)] font-mono text-sm font-bold text-[hsl(var(--primary))]">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[hsl(var(--secondary))] font-mono text-sm font-bold text-[hsl(var(--primary))]">
               {initials(data.name)}
             </div>
             <div>
-              <p className="text-lg font-bold tracking-[-.03em]">{data.name}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-lg font-bold tracking-[-.03em] text-[hsl(var(--foreground))]">{data.name}</p>
+              <p className="text-xs text-[hsl(var(--muted-foreground))]">
                 {data.source} · {data.campaign || 'No campaign'}
               </p>
               {isEmergency(data) && (
                 <span className="mt-1.5 inline-block" data-testid="badge-emergency">
-                  <Badge className="bg-[#f7d6c7] text-[#8d371f]">Emergency</Badge>
+                  <Badge className="border-[#fb8c6c]/55 bg-[#fdf4f1] text-[#9a3412]">Emergency</Badge>
                 </span>
               )}
             </div>
           </div>
-          <button className="rounded-lg p-2 text-muted-foreground hover:bg-[hsl(var(--muted))]" onClick={onClose} data-testid="button-close-lead">
+          <button className="rounded-md p-2 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]" onClick={onClose} data-testid="button-close-lead">
             <X size={18} />
           </button>
         </div>
 
         <div className="scrollbar-subtle flex-1 overflow-y-auto p-6">
           {message && (
-            <div className="mb-5 flex items-center gap-2 rounded-lg bg-[hsl(var(--accent)/.1)] px-3 py-2.5 text-xs font-semibold text-[hsl(var(--accent))]">
+            <div className="mb-5 flex items-center gap-2 rounded-lg bg-[hsl(var(--primary))/0.08] px-3 py-2.5 text-xs font-semibold text-[hsl(var(--primary))]">
               <CheckCircle2 size={15} />
               {message}
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="rounded-lg bg-[hsl(var(--muted)/.65)] p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Intent</p>
-              <p className="mt-1 font-mono text-xl font-bold">{data.intent_score}</p>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.5] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Intent</p>
+              <p className="mt-1 font-mono text-xl font-bold text-[hsl(var(--foreground))]">{data.intent_score}</p>
             </div>
-            <div className="rounded-lg bg-[hsl(var(--muted)/.65)] p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Score</p>
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.5] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Score</p>
               <div className="mt-1">
                 <Badge className={scoreTone(data.score)}>{data.score}</Badge>
               </div>
             </div>
-            <div className="rounded-lg bg-[hsl(var(--muted)/.65)] p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Status</p>
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.5] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Status</p>
               <div className="mt-1">
                 <Badge className={statusTone(data.status)}>{data.status}</Badge>
               </div>
             </div>
-            <div className="rounded-lg bg-[hsl(var(--muted)/.65)] p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Last call</p>
-              <p className="mt-1 text-xs font-semibold">{data.last_call ? relativeTime(data.last_call) : 'Never'}</p>
+            <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.5] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Last call</p>
+              <p className="mt-1 text-xs font-semibold text-[hsl(var(--foreground))]">
+                {data.last_call ? relativeTime(data.last_call) : 'Never'}
+              </p>
             </div>
           </div>
 
-          <div className="mt-6 flex flex-wrap gap-2">
+          <div className="mt-7 flex flex-wrap gap-2">
             <Button variant="primary" onClick={handleCall} disabled={startCall.isPending || data.suppressed} data-testid="button-call-lead">
               <PhoneCall size={15} />
               {startCall.isPending ? 'Queueing…' : 'Call now'}
@@ -236,9 +244,9 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
             )}
           </div>
 
-          <section className="mt-7">
-            <h3 className="text-xs font-bold uppercase tracking-[.15em] text-muted-foreground">Lead context</h3>
-            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+          <section className="mt-8">
+            <h3 className="text-[10px] font-bold uppercase tracking-[.15em] text-[hsl(var(--muted-foreground))]">Lead context</h3>
+            <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <Info label="Phone" value={data.phone} />
               <Info label="Email" value={data.email || 'Not provided'} />
               {realEstate ? (
@@ -252,11 +260,10 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
               ) : (
                 <>
                   {profile!.fields.map((field) =>
-                    // Free text (the problem, the address) is shown in full, not cut off.
                     field.type === 'text' && !field.in_list ? (
                       <div key={field.key} className="col-span-2" data-testid={`field-${field.key}`}>
-                        <p className="text-[11px] text-muted-foreground">{field.label}</p>
-                        <p className="mt-1 whitespace-pre-wrap break-words font-medium">{displayValue(data, field)}</p>
+                        <p className="text-[11px] font-semibold text-[hsl(var(--muted-foreground))]">{field.label}</p>
+                        <p className="mt-1 whitespace-pre-wrap break-words font-medium text-[hsl(var(--foreground))]">{displayValue(data, field)}</p>
                       </div>
                     ) : (
                       <div key={field.key} data-testid={`field-${field.key}`}>
@@ -272,27 +279,27 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
           </section>
 
           {data.consent_evidence && (
-            <section className="mt-6" data-testid="consent-evidence">
-              <h3 className="text-xs font-bold uppercase tracking-[.15em] text-muted-foreground">Consent wording</h3>
-              <p className="mt-2 rounded-lg bg-[hsl(var(--muted)/.65)] p-3 text-sm leading-6">{data.consent_evidence}</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">{data.consent_detail}</p>
+            <section className="mt-7" data-testid="consent-evidence">
+              <h3 className="text-[10px] font-bold uppercase tracking-[.15em] text-[hsl(var(--muted-foreground))]">Consent wording</h3>
+              <p className="mt-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.5] p-3 text-sm leading-6 text-[hsl(var(--foreground))]">{data.consent_evidence}</p>
+              <p className="mt-1 text-[11px] text-[hsl(var(--muted-foreground))]">{data.consent_detail}</p>
             </section>
           )}
 
-          <section className="mt-7 rounded-xl border border-border p-4">
+          <section className="mt-7 rounded-lg border border-[hsl(var(--border))] p-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-bold">Verified booking</h3>
-                <p className="mt-1 text-xs text-muted-foreground">Check live availability before offering a slot.</p>
+                <h3 className="font-bold text-[hsl(var(--foreground))]">Verified booking</h3>
+                <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Check live availability before offering a slot.</p>
               </div>
-              <CalendarDays size={18} className="text-[hsl(var(--accent))]" />
+              <CalendarDays size={17} className="text-[hsl(var(--primary))]" />
             </div>
             <div className="mt-4 flex gap-2">
               <input
                 type="date"
                 value={bookDate}
                 onChange={(event) => setBookDate(event.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-w-0 flex-1 rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:border-[hsl(var(--primary))] focus:ring-1 focus:ring-[hsl(var(--primary))]"
                 data-testid="input-availability-date"
               />
               <Button onClick={checkAvailability} disabled={availability.isPending} data-testid="button-check-availability">
@@ -303,7 +310,7 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
             {availability.data && (
               <div className="mt-3 space-y-2">
                 {availability.data.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No open slots for this date.</p>
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">No open slots for this date.</p>
                 ) : (
                   availability.data.map((slot) => (
                     <button
@@ -319,11 +326,11 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
                           },
                         )
                       }
-                      className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left text-sm transition hover:border-[hsl(var(--accent))] hover:bg-[hsl(var(--accent)/.06)]"
+                      className="flex w-full items-center justify-between rounded-md border border-[hsl(var(--border))] px-3 py-2 text-left text-sm transition hover:border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))/0.05]"
                       data-testid={`button-book-slot-${slot.start_time}`}
                     >
                       <span>{slot.label}</span>
-                      <ChevronRight size={14} className="text-muted-foreground" />
+                      <ChevronRight size={14} className="text-[hsl(var(--muted-foreground))]" />
                     </button>
                   ))
                 )}
@@ -331,10 +338,10 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
             )}
           </section>
 
-          <section className="mt-6 rounded-xl bg-[hsl(var(--muted)/.55)] p-4">
-            <p className="text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">Next action</p>
-            <p className="mt-2 text-sm font-semibold">{data.next_action || 'No next action set'}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Qualification: {data.qualification_status || 'Not reviewed'}</p>
+          <section className="mt-6 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.4] p-4">
+            <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[hsl(var(--muted-foreground))]">Next action</p>
+            <p className="mt-2 text-sm font-semibold text-[hsl(var(--foreground))]">{data.next_action || 'No next action set'}</p>
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Qualification: {data.qualification_status || 'Not reviewed'}</p>
           </section>
         </div>
       </div>
@@ -378,8 +385,6 @@ export default function LeadsPage() {
   const leads = useGetLeads(params);
   const startCall = useStartCall();
   const queryClient = useQueryClient();
-  // Non-real-estate workspaces render lead fields from their industry profile;
-  // real estate keeps the original columns below.
   const session = useGetAuthMe({ query: { queryKey: getGetAuthMeQueryKey() } });
   const profile = session.data?.profile;
   const realEstate = isRealEstateProfile(profile);
@@ -544,21 +549,28 @@ export default function LeadsPage() {
     reader.readAsText(file);
   };
 
+  const visibleCount = leads.data?.length ?? 0;
+
   return (
     <div className="animate-rise-in space-y-5">
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-        <div>
-          <p className="text-sm text-muted-foreground">A lead is a conversation waiting for context.</p>
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-mono text-foreground">{leads.data?.length ?? '—'}</span> visible leads{' '}
-            <span className="text-border">/</span> sorted by latest signal
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <PageHeader
+        eyebrow="Console"
+        title="Leads"
+        description="Find the next best conversation."
+        action={
           <Button variant="primary" onClick={() => setShowAddLead(true)} data-testid="button-open-add-lead">
             <Plus size={15} />
             Add Lead
           </Button>
+        }
+      />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-2 text-sm text-[hsl(var(--muted-foreground))]">
+          <span className="font-mono text-[hsl(var(--foreground))]">{visibleCount}</span> visible leads
+          <span className="text-[hsl(var(--border))]">/</span> sorted by latest signal
+        </div>
+        <div className="flex flex-wrap gap-2">
           <Button onClick={() => setShowImport(true)} data-testid="button-open-import">
             <Upload size={15} />
             Import CSV
@@ -575,7 +587,7 @@ export default function LeadsPage() {
           <Link
             href="/workspace/leads"
             data-testid="link-refresh-leads"
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--muted))]"
+            className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-sm font-semibold hover:bg-[hsl(var(--muted))]"
           >
             <RefreshCw size={15} />
             Refresh
@@ -583,22 +595,21 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 rounded-xl border border-border bg-[hsl(var(--card))] p-3 md:flex-row">
+      <div className="flex flex-col gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-3 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
-          <Search className="absolute left-3 top-2.5 text-muted-foreground" size={17} />
-          <input
+          <Search className="absolute left-3 top-[50%] -translate-y-[50%] text-[hsl(var(--muted-foreground))]" size={17} />
+          <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search name, phone, project…"
-            className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:border-[hsl(var(--accent))]"
+            className="w-full pl-9"
             data-testid="input-search-leads"
           />
         </div>
         <div className="flex gap-2">
-          <select
+          <Select
             value={status}
             onChange={(event) => setStatus(event.target.value)}
-            className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="select-lead-status"
           >
             <option value="all">All statuses</option>
@@ -607,19 +618,18 @@ export default function LeadsPage() {
             <option value="qualified">Qualified</option>
             <option value="booked">Booked</option>
             <option value="suppressed">Suppressed</option>
-          </select>
-          <select
+          </Select>
+          <Select
             value={score}
             onChange={(event) => setScore(event.target.value)}
-            className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
             data-testid="select-lead-score"
           >
             <option value="all">All scores</option>
             <option value="hot">Hot</option>
             <option value="warm">Warm</option>
             <option value="cold">Cold</option>
-          </select>
-          <Button variant="quiet" className="px-2" data-testid="button-filter-leads">
+          </Select>
+          <Button variant="quiet" size="icon" className="px-0" data-testid="button-filter-leads" aria-label="Filters">
             <Filter size={16} />
           </Button>
         </div>
@@ -628,7 +638,7 @@ export default function LeadsPage() {
       {leads.isLoading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4, 5].map((n) => (
-            <Skeleton key={n} className="h-20" />
+            <Skeleton key={n} className="h-10 w-full" />
           ))}
         </div>
       ) : leads.isError ? (
@@ -652,62 +662,70 @@ export default function LeadsPage() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-[hsl(var(--card))]">
-          <div className="hidden grid-cols-[minmax(220px,1.3fr)_1fr_1fr_1fr_120px] gap-4 border-b border-border bg-[hsl(var(--muted)/.55)] px-5 py-3 text-[10px] font-bold uppercase tracking-[.14em] text-muted-foreground md:grid">
-            <span>Lead</span>
-            <span>Intent</span>
-            <span>Need</span>
-            <span>Next action</span>
-            <span />
-          </div>
-          <div className="divide-y divide-border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[260px]">Lead</TableHead>
+              <TableHead>Intent &amp; score</TableHead>
+              <TableHead className="text-right">Next action</TableHead>
+              <TableHead className="text-right">Last call</TableHead>
+              <TableHead className="text-right w-12">Status</TableHead>
+              <TableHead className="w-16" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {leads.data.map((lead) => (
-              <div
-                key={lead.id}
-                className="grid gap-3 px-4 py-4 transition hover:bg-[hsl(var(--muted)/.32)] md:grid-cols-[minmax(220px,1.3fr)_1fr_1fr_1fr_120px] md:items-center md:gap-4 md:px-5"
-                data-testid={`row-lead-${lead.id}`}
-              >
-                <button
-                  className="flex min-w-0 items-center gap-3 text-left"
-                  onClick={() => setSelected(lead.id)}
-                  data-testid={`button-open-lead-${lead.id}`}
-                >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--secondary)/.35)] font-mono text-[11px] font-bold text-[hsl(var(--primary))]">
-                    {initials(lead.name)}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-bold">{lead.name}</span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {lead.phone} · {lead.project}
+              <TableRow key={lead.id} data-testid={`row-lead-${lead.id}`}>
+                <TableCell className="w-[260px]">
+                  <button
+                    className="flex min-w-0 items-center gap-3 text-left"
+                    onClick={() => setSelected(lead.id)}
+                    data-testid={`button-open-lead-${lead.id}`}
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--secondary))] font-mono text-[11px] font-bold text-[hsl(var(--primary))]">
+                      {initials(lead.name)}
                     </span>
-                  </span>
-                </button>
-                <div className="flex flex-wrap items-center gap-2">
-                  {isEmergency(lead) && <Badge className="bg-[#f7d6c7] text-[#8d371f]">Emergency</Badge>}
-                  <Badge className={scoreTone(lead.score)}>{lead.score}</Badge>
-                  <span className="font-mono text-xs text-muted-foreground">{lead.intent_score}/100</span>
-                  {lead.consent_status !== 'valid' && (
-                    <ConsentBadge status={lead.consent_status} unknownLabel={realEstate ? undefined : 'Needs consent'} />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-[hsl(var(--foreground))]">{lead.name}</span>
+                      <span className="mt-0.5 block truncate text-xs text-[hsl(var(--muted-foreground))]">
+                        {lead.phone} · {lead.project}
+                      </span>
+                    </span>
+                  </button>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isEmergency(lead) && <Badge className="border-[#fb8c6c]/55 bg-[#fdf4f1] text-[#9a3412]">Emergency</Badge>}
+                    <Badge className={scoreTone(lead.score)}>{lead.score}</Badge>
+                    <span className="font-mono text-xs text-[hsl(var(--muted-foreground))]">{lead.intent_score}/100</span>
+                    {lead.consent_status !== 'valid' && (
+                      <ConsentBadge status={lead.consent_status} unknownLabel={realEstate ? undefined : 'Needs consent'} />
+                    )}
+                  </div>
+                  {realEstate ? (
+                    <div className="mt-1.5">
+                      <p className="text-sm font-medium text-[hsl(var(--foreground))]">{lead.property_type}</p>
+                      <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
+                        {lead.budget_label} · {lead.timeline}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5">
+                      <p className="text-sm font-medium text-[hsl(var(--foreground))]">{listSummary(lead, profile!).primary}</p>
+                      <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">{listSummary(lead, profile!).secondary}</p>
+                    </div>
                   )}
-                </div>
-                {realEstate ? (
-                  <div>
-                    <p className="text-sm font-medium">{lead.property_type}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {lead.budget_label} · {lead.timeline}
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-sm font-medium">{listSummary(lead, profile!).primary}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{listSummary(lead, profile!).secondary}</p>
-                  </div>
-                )}
-                <div>
-                  <p className="text-sm font-medium">{lead.next_action || 'Review lead'}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{relativeTime(lead.last_call || lead.created_at)}</p>
-                </div>
-                <div className="flex items-center justify-end gap-1">
+                </TableCell>
+                <TableCell className="text-right">
+                  <p className="text-sm font-medium text-[hsl(var(--foreground))]">{lead.next_action || 'Review lead'}</p>
+                  <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
+                    {relativeTime(lead.last_call || lead.created_at)}
+                  </p>
+                </TableCell>
+                <TableCell className="text-right w-12">
+                  <p className="text-xs font-mono text-[hsl(var(--muted-foreground))] text-right">{lead.status}</p>
+                </TableCell>
+                <TableCell className="w-16 text-right">
                   <button
                     onClick={() =>
                       startCall.mutate(
@@ -716,7 +734,7 @@ export default function LeadsPage() {
                       )
                     }
                     disabled={!lead.callable || startCall.isPending}
-                    className="rounded-lg p-2 text-[hsl(var(--accent))] hover:bg-[hsl(var(--accent)/.1)] disabled:opacity-40"
+                    className="rounded-md p-2 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))/0.08] disabled:opacity-40"
                     title={lead.callable ? 'Call now' : lead.consent_detail || 'This lead cannot be called'}
                     data-testid={`button-call-row-${lead.id}`}
                   >
@@ -724,28 +742,28 @@ export default function LeadsPage() {
                   </button>
                   <button
                     onClick={() => setSelected(lead.id)}
-                    className="rounded-lg p-2 text-muted-foreground hover:bg-[hsl(var(--muted))]"
+                    className="rounded-md p-2 text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]"
                     title="Open details"
                     data-testid={`button-details-row-${lead.id}`}
                   >
                     <ChevronRight size={16} />
                   </button>
-                </div>
-              </div>
+                </TableCell>
+              </TableRow>
             ))}
-          </div>
-        </div>
+          </TableBody>
+        </Table>
       )}
 
       {selected && <LeadDetail id={selected} onClose={() => setSelected(null)} />}
 
       {showImport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#102632]/35 p-5">
-          <div className="w-full max-w-[440px] rounded-2xl border border-border bg-[hsl(var(--card))] p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--foreground))/0.25] backdrop-blur-sm p-5" onKeyDown={(event) => { if (event.key === 'Escape') setShowImport(false); }}>
+          <div className="w-full max-w-[460px] rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-lg font-bold">Import lead rows</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
+                <h2 className="text-lg font-bold text-[hsl(var(--foreground))]">Import lead rows</h2>
+                <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
                   Use a CSV with name and phone columns. Quoted commas are handled.
                 </p>
               </div>
@@ -753,31 +771,31 @@ export default function LeadsPage() {
                 <X size={18} />
               </button>
             </div>
-            <label className="mt-5 block text-sm font-semibold">
+            <label className="mt-6 block text-sm font-semibold text-[hsl(var(--foreground))]">
               Where was consent captured?
-              <input
+              <Input
                 value={consentSource}
                 onChange={(event) => {
                   setConsentSource(event.target.value);
                   setImportError(null);
                 }}
                 placeholder="e.g. Website enquiry form, 12 Sep 2026"
-                className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+                className="mt-2 w-full"
                 data-testid="input-consent-source"
               />
-              <span className="mt-1.5 block text-xs font-normal leading-5 text-muted-foreground">
+              <span className="mt-1.5 block text-xs text-[hsl(var(--muted-foreground))]">
                 Required. Leads imported without recorded consent evidence are never called.
               </span>
             </label>
-            <label className="mt-5 flex cursor-pointer flex-col items-center rounded-xl border border-dashed border-[hsl(var(--accent)/.5)] bg-[hsl(var(--accent)/.04)] p-8 text-center hover:bg-[hsl(var(--accent)/.08)]">
-              <Upload className="text-[hsl(var(--accent))]" size={22} />
-              <span className="mt-3 text-sm font-semibold">Choose CSV file</span>
-              <span className="mt-1 text-xs text-muted-foreground">Rows are normalized before import.</span>
+            <label className="mt-5 flex cursor-pointer flex-col items-center rounded-lg border border-dashed border-[hsl(var(--primary))/0.5] bg-[hsl(var(--primary))/0.05] p-8 text-center hover:bg-[hsl(var(--primary))/0.10]">
+              <Upload className="text-[hsl(var(--primary))]" size={22} />
+              <span className="mt-3 text-sm font-semibold text-[hsl(var(--foreground))]">Choose CSV file</span>
+              <span className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Rows are normalized before import.</span>
               <input type="file" accept=".csv,text/csv" onChange={handleImport} className="hidden" data-testid="input-import-csv" />
             </label>
-            {importLeads.isPending && <p className="mt-3 text-xs text-muted-foreground">Importing rows…</p>}
+            {importLeads.isPending && <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">Importing rows…</p>}
             {importNotice && (
-              <p className="mt-3 text-xs text-muted-foreground" data-testid="text-import-notice">
+              <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]" data-testid="text-import-notice">
                 {importNotice}
               </p>
             )}
@@ -794,12 +812,12 @@ export default function LeadsPage() {
       )}
 
       {showAddLead && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#102632]/35 p-5">
-          <div className="w-full max-w-[500px] rounded-2xl border border-border bg-[hsl(var(--card))] p-6 shadow-2xl">
-            <div className="flex items-start justify-between border-b border-border pb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--foreground))/0.25] backdrop-blur-sm p-5" onKeyDown={(event) => { if (event.key === 'Escape') setShowAddLead(false); }}>
+          <div className="w-full max-w-[520px] rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6">
+            <div className="flex items-start justify-between border-b border-[hsl(var(--border))] pb-4">
               <div>
-                <h2 className="text-lg font-bold">Add New Lead</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <h2 className="text-lg font-bold text-[hsl(var(--foreground))]">Add New Lead</h2>
+                <p className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
                   Quickly register an inbound lead and optionally trigger an instant AI qualification call.
                 </p>
               </div>
@@ -808,109 +826,103 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            <form onSubmit={handleAddLead} className="mt-4 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-xs font-semibold">
-                  Full Name *
-                  <input
+            <form onSubmit={handleAddLead} className="mt-5 space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Full Name <span className="text-[hsl(var(--destructive))]">*</span></label>
+                  <Input
                     required
                     value={addLeadForm.name}
                     onChange={(e) => setAddLeadForm((prev) => ({ ...prev, name: e.target.value }))}
                     placeholder="e.g. Michael Scott"
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    className="w-full"
                     data-testid="input-add-lead-name"
                   />
-                </label>
-                <label className="block text-xs font-semibold">
-                  Phone Number *
-                  <input
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Phone Number <span className="text-[hsl(var(--destructive))]">*</span></label>
+                  <Input
                     required
                     value={addLeadForm.phone}
                     onChange={(e) => setAddLeadForm((prev) => ({ ...prev, phone: e.target.value }))}
                     placeholder="+19175550188"
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    className="w-full"
                     data-testid="input-add-lead-phone"
                   />
-                </label>
+                </div>
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-xs font-semibold">
-                  Email (Optional)
-                  <input
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Email (Optional)</label>
+                  <Input
                     type="email"
                     value={addLeadForm.email}
                     onChange={(e) => setAddLeadForm((prev) => ({ ...prev, email: e.target.value }))}
                     placeholder="client@example.com"
-                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                    className="w-full"
                     data-testid="input-add-lead-email"
                   />
-                </label>
+                </div>
                 {realEstate && (
-                  <label className="block text-xs font-semibold">
-                    Property Type
-                    <input
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Property Type</label>
+                    <Input
                       value={addLeadForm.property_type}
                       onChange={(e) => setAddLeadForm((prev) => ({ ...prev, property_type: e.target.value }))}
                       placeholder="Condo, Single Family, etc."
-                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      className="w-full"
                       data-testid="input-add-lead-property-type"
                     />
-                  </label>
+                  </div>
                 )}
               </div>
-
               {realEstate && (
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="block text-xs font-semibold">
-                    Target Budget
-                    <input
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Target Budget</label>
+                    <Input
                       value={addLeadForm.budget_label}
                       onChange={(e) => setAddLeadForm((prev) => ({ ...prev, budget_label: e.target.value }))}
                       placeholder="$600k – $900k"
-                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      className="w-full"
                       data-testid="input-add-lead-budget"
                     />
-                  </label>
-                  <label className="block text-xs font-semibold">
-                    Timeline
-                    <input
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Timeline</label>
+                    <Input
                       value={addLeadForm.timeline}
                       onChange={(e) => setAddLeadForm((prev) => ({ ...prev, timeline: e.target.value }))}
                       placeholder="1–3 months"
-                      className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                      className="w-full"
                       data-testid="input-add-lead-timeline"
                     />
-                  </label>
+                  </div>
                 </div>
               )}
-
-              <label className="block text-xs font-semibold">
-                Consent Evidence Source *
-                <input
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-[hsl(var(--muted-foreground))]">Consent Evidence Source <span className="text-[hsl(var(--destructive))]">*</span></label>
+                <Input
                   required
                   value={addLeadForm.consent_source}
                   onChange={(e) => setAddLeadForm((prev) => ({ ...prev, consent_source: e.target.value }))}
                   placeholder="e.g. Phone inquiry, Open House walk-in"
-                  className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-[hsl(var(--accent))]"
+                  className="w-full"
                   data-testid="input-add-lead-consent-source"
                 />
-                <span className="mt-1 block text-[11px] font-normal text-muted-foreground">
+                <span className="text-[11px] text-[hsl(var(--muted-foreground))]">
                   TCPA compliance requirement: records why this contact may be dialed.
                 </span>
-              </label>
-
-              <label className="flex items-center gap-2.5 rounded-lg border border-border bg-[hsl(var(--muted)/.4)] p-3 cursor-pointer">
-                <input
-                  type="checkbox"
+              </div>
+              <label className="flex items-center gap-2.5 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))/0.4] p-3 cursor-pointer">
+                <Checkbox
                   checked={addLeadForm.call_immediately}
-                  onChange={(e) => setAddLeadForm((prev) => ({ ...prev, call_immediately: e.target.checked }))}
-                  className="h-4 w-4 rounded border-input text-[hsl(var(--accent))] focus:ring-0"
+                  onChange={(checked) => setAddLeadForm((prev) => ({ ...prev, call_immediately: checked }))}
                   data-testid="checkbox-add-lead-call-now"
                 />
                 <div>
-                  <span className="block text-xs font-semibold">Call lead immediately</span>
-                  <span className="block text-[11px] text-muted-foreground">
+                  <span className="block text-xs font-semibold text-[hsl(var(--foreground))]">Call lead immediately</span>
+                  <span className="block text-[11px] text-[hsl(var(--muted-foreground))]">
                     Queues and starts the AI qualification call as soon as the lead is saved.
                   </span>
                 </div>
