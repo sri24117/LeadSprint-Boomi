@@ -210,6 +210,59 @@ export function hasTwilioRoute(market: "US" | "IN"): boolean {
   return Boolean(config.accountSid && config.authToken && fromNumber);
 }
 
+/**
+ * Returns true if Twilio SMS can be sent for the given market.
+ * Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and the
+ * market-appropriate TWILIO_FROM_NUMBER_* to be configured.
+ */
+export function hasTwilioSmsConfig(market: "US" | "IN"): boolean {
+  return hasTwilioRoute(market);
+}
+
+/**
+ * Sends an SMS via the Twilio Messages REST API.
+ * Uses HTTP Basic auth (accountSid:authToken) — no Twilio SDK required.
+ * Throws ProviderNotConfiguredError if credentials are missing, so the
+ * caller can catch it and log rather than crashing the webhook handler.
+ */
+export async function sendTwilioSms(input: {
+  to: string;
+  body: string;
+  market: "US" | "IN";
+}): Promise<{ messageSid: string }> {
+  const config = providerConfig().twilio;
+  const fromNumber =
+    input.market === "IN" ? config.indiaFromNumber : config.usFromNumber;
+  const values = requireValues("Twilio SMS", {
+    accountSid: config.accountSid,
+    authToken: config.authToken,
+    fromNumber,
+  });
+
+  const params = new URLSearchParams({
+    To: input.to,
+    From: values.fromNumber,
+    Body: input.body,
+  });
+
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${values.accountSid}/Messages.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        // Twilio REST API uses HTTP Basic auth, not Bearer tokens.
+        Authorization: `Basic ${Buffer.from(`${values.accountSid}:${values.authToken}`).toString("base64")}`,
+      },
+      body: params.toString(),
+    },
+  );
+
+  const body = await parseProviderResponse<{ sid?: string }>(response, "Twilio SMS");
+  if (!body?.sid) throw new ProviderRequestError("Twilio did not return message SID");
+  return { messageSid: body.sid };
+}
+
 export function providerReadiness(market: "US" | "IN") {
   const config = providerConfig();
   const retellFrom =

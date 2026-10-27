@@ -14,7 +14,9 @@ import {
 import { normalizePhone, samePhone, suppressContact } from "../lib/suppression";
 import {
   extractRetellCall,
+  hasTwilioSmsConfig,
   providerConfig,
+  sendTwilioSms,
   verifyCalSignature,
   verifyRetellSignature,
   verifyTwilioSignature,
@@ -495,6 +497,81 @@ router.post("/webhooks/retell", async (req, res): Promise<void> => {
         nextAction: "Call back — transfer to human did not connect",
         updatedAt: new Date(),
       }).where(and(eq(leadsTable.id, callBefore.leadId), eq(leadsTable.businessId, businessId)));
+    }
+
+    // Speed-to-lead SMS: when the lead didn't answer (voicemail or no-answer),
+    // send a follow-up SMS 2 minutes later so we stay in their attention window
+    // without hammering them immediately. The SMS is fire-and-forget — a failure
+    // is logged as a warning so the webhook still returns 202 and the call
+    // record is already written. Only fires if Twilio is configured for the
+    // business's market; silently skips otherwise.
+    const missedCallReasons = ["voicemail_reached", "dial_no_answer", "machine_detected"];
+    const wasMissedCall =
+      terminal &&
+      disconnectionReason != null &&
+      missedCallReasons.includes(disconnectionReason) &&
+      callRow != null;
+
+    if (wasMissedCall) {
+      // Fetch the contact's phone and the business project name so the SMS
+      // is personalised — avoids a cold "we tried to call you" message.
+      const [contactRow] = await db
+        .select({ phone: contactsTable.phone, name: contactsTable.name })
+        .from(contactsTable)
+        .where(and(eq(contactsTable.id, callRow!.contactId), eq(contactsTable.businessId, businessId)))
+        .limit(1);
+      const [businessRow] = await db
+        .select({ projectName: businessesTable.projectName, market: businessesTable.market })
+        .from(businessesTable)
+        .where(eq(businessesTable.id, businessId))
+        .limit(1);
+
+      if (contactRow && businessRow) {
+        const market = (businessRow.market === "IN" ? "IN" : "US") as "US" | "IN";
+        const firstName = contactRow.name.split(" ")[0] ?? contactRow.name;
+        const smsBody =
+          `Hi ${firstName}, we just tried calling about your enquiry for ${businessRow.projectName}. ` +
+          `Reply to this message or just call back when you're free — we'd love to help.`;
+
+        // Capture DB handle and businessId in closure so the setTimeout
+        // callback can still write the activity row after the request is done.
+        const dbHandle = db;
+        const capturedBusinessId = businessId;
+        const capturedCallId = callId;
+
+        // 2-minute delay: enough time that the lead has put the phone down
+        // and will actually read the SMS, but short enough to still feel instant.
+        setTimeout(async () => {
+          try {
+            if (!hasTwilioSmsConfig(market)) {
+              req.log?.info?.(
+                { businessId: capturedBusinessId, callId: capturedCallId },
+                "Skipping missed-call SMS — Twilio not configured for market",
+              );
+              return;
+            }
+            const { messageSid } = await sendTwilioSms({
+              to: contactRow.phone,
+              body: smsBody,
+              market,
+            });
+            await dbHandle.insert(activitiesTable).values({
+              id: `activity_${crypto.randomUUID().slice(0, 12)}`,
+              businessId: capturedBusinessId,
+              type: "message",
+              title: `SMS follow-up sent to ${contactRow.name}`,
+              detail: `Missed-call SMS dispatched (sid: ${messageSid}). Message: "${smsBody.slice(0, 100)}…"`,
+            });
+          } catch (err) {
+            // Non-fatal: the call record and usage are already written.
+            // Log so the operator can see it in monitoring.
+            req.log?.warn?.(
+              { businessId: capturedBusinessId, callId: capturedCallId, err },
+              "Missed-call SMS failed to send",
+            );
+          }
+        }, 2 * 60 * 1000);
+      }
     }
   }
   res.status(202).json({ accepted: true, duplicate: !accepted });

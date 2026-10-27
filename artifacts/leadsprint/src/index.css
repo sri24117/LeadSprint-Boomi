@@ -1,5 +1,5 @@
 @layer theme, base, clerk, components, utilities;
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 @import 'tailwindcss';
 @import '@clerk/themes/shadcn.css';
 @import 'tw-animate-css';
@@ -69,57 +69,55 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* LIGHT MODE */
+/* LIGHT MODE - BOOMISOLUTIONS VIOLET & SLATE THEME */
 :root {
-  --button-outline: rgba(0, 0, 0, 0.1);
-  --badge-outline: rgba(0, 0, 0, 0.05);
+  --button-outline: rgba(0, 0, 0, 0.08);
+  --badge-outline: rgba(0, 0, 0, 0.04);
 
-  /* Automatic computation of border around primary / danger buttons */
-  --opaque-button-border-intensity: -8; /* In terms of percentages */
+  --opaque-button-border-intensity: -8;
 
-  /* Backgrounds applied on top of other backgrounds when hovered/active */
-  --elevate-1: rgba(0, 0, 0, 0.03);
-  --elevate-2: rgba(0, 0, 0, 0.08);
+  --elevate-1: rgba(0, 0, 0, 0.02);
+  --elevate-2: rgba(0, 0, 0, 0.05);
 
-  --background: 42 29% 95%;
-  --foreground: 213 27% 17%;
-  --border: 39 19% 85%;
-  --card: 43 32% 98%;
-  --card-foreground: 213 27% 17%;
-  --card-border: 39 19% 87%;
-  --sidebar: 209 43% 18%;
-  --sidebar-foreground: 42 28% 91%;
-  --sidebar-border: 209 34% 25%;
-  --sidebar-primary: 39 82% 63%;
-  --sidebar-primary-foreground: 209 43% 18%;
-  --sidebar-accent: 209 34% 25%;
-  --sidebar-accent-foreground: 42 28% 95%;
-  --sidebar-ring: 39 82% 63%;
-  --popover: 43 32% 98%;
-  --popover-foreground: 213 27% 17%;
-  --popover-border: 39 19% 85%;
-  --primary: 209 43% 22%;
-  --primary-foreground: 42 28% 95%;
-  --secondary: 39 82% 63%;
-  --secondary-foreground: 209 43% 18%;
-  --muted: 39 24% 90%;
-  --muted-foreground: 211 17% 43%;
-  --accent: 164 38% 32%;
-  --accent-foreground: 42 28% 95%;
-  --destructive: 2 63% 48%;
-  --destructive-foreground: 42 28% 95%;
-  --input: 39 19% 80%;
-  --ring: 164 38% 32%;
-  --chart-1: 164 38% 32%;
-  --chart-2: 39 82% 63%;
-  --chart-3: 209 43% 22%;
-  --chart-4: 2 63% 48%;
-  --chart-5: 27 69% 54%;
+  --background: 210 20% 98%; /* #f8fafc */
+  --foreground: 222 47% 11%; /* #0f172a */
+  --border: 220 13% 91%; /* #e2e8f0 */
+  --card: 0 0% 100%; /* #ffffff */
+  --card-foreground: 222 47% 11%;
+  --card-border: 220 13% 91%;
+  --sidebar: 0 0% 100%; /* clean white sidebar */
+  --sidebar-foreground: 222 47% 18%;
+  --sidebar-border: 220 13% 91%;
+  --sidebar-primary: 258 90% 66%; /* #8b5cf6 / violet */
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 255 90% 96%; /* #f3e8ff / soft lavender */
+  --sidebar-accent-foreground: 258 90% 60%;
+  --sidebar-ring: 258 90% 66%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 220 13% 91%;
+  --primary: 258 90% 66%; /* #8b5cf6 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 255 90% 96%;
+  --secondary-foreground: 258 90% 60%;
+  --muted: 220 14% 96%; /* #f1f5f9 */
+  --muted-foreground: 215 16% 47%; /* #64748b */
+  --accent: 258 90% 66%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 220 13% 91%;
+  --ring: 258 90% 66%;
+  --chart-1: 258 90% 66%;
+  --chart-2: 160 84% 39%;
+  --chart-3: 221 83% 53%;
+  --chart-4: 38 92% 50%;
+  --chart-5: 0 84% 60%;
 
-  --app-font-sans: 'DM Sans', sans-serif;
+  --app-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'DM Sans', sans-serif;
   --app-font-serif: Georgia, serif;
   --app-font-mono: 'Space Mono', monospace;
-  --radius: 0.5rem; /* 8px */
+  --radius: 0.75rem; /* 12px */
   --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0); /*replace with H S L */
   --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0); /*replace with H S L */
   --shadow-sm:
