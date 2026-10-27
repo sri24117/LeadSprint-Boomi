@@ -7,14 +7,24 @@ import {
   AlertTriangle,
   BarChart3,
   Bell,
+  Bot,
   CalendarDays,
+  CheckCircle2,
+  Clock,
+  Compass,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
   PhoneCall,
+  Plus,
+  Radio,
+  Settings,
   Settings2,
   ShieldCheck,
+  Sparkles,
   UsersRound,
+  Wallet,
   X,
 } from 'lucide-react';
 import {
@@ -33,41 +43,66 @@ import CallsPage from '@/pages/calls';
 import AppointmentsPage from '@/pages/appointments';
 import ReportsPage from '@/pages/reports';
 import SettingsPage from '@/pages/settings';
+import AgentsPage from '@/pages/agents';
+import AgentBuilderPage from '@/pages/agent-builder';
+import LiveCallsPage from '@/pages/live-calls';
+import ContactsPage from '@/pages/contacts';
+import CrmPage from '@/pages/crm';
+import TeamsPage from '@/pages/teams';
+import AnalyticsPage from '@/pages/analytics';
+import BillingPage from '@/pages/billing';
 
 const queryClient = new QueryClient();
 
-const navItems = [
-  { href: '/workspace', label: 'Today', icon: LayoutDashboard },
-  { href: '/workspace/leads', label: 'Leads', icon: UsersRound },
-  { href: '/workspace/calls', label: 'Calls', icon: PhoneCall },
-  { href: '/workspace/appointments', label: 'Appointments', icon: CalendarDays },
-  { href: '/workspace/reports', label: 'Reports', icon: BarChart3 },
-  { href: '/workspace/business-settings', label: 'Business settings', icon: Settings2 },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: any;
+  badge?: string;
+  subItems?: Array<{ href: string; label: string; icon: any }>;
+}
+
+const navItems: NavItem[] = [
+  { href: '/workspace', label: 'Dashboard', icon: LayoutDashboard },
+  {
+    href: '/workspace/agents',
+    label: 'AI Agents',
+    icon: Bot,
+    subItems: [{ href: '/workspace/agent-builder', label: 'Agent Builder', icon: Plus }],
+  },
+  { href: '/workspace/live-calls', label: 'Live Calls', icon: Radio, badge: 'Live' },
+  { href: '/workspace/calls', label: 'Call History', icon: History },
+  { href: '/workspace/contacts', label: 'Contacts', icon: UsersRound },
+  { href: '/workspace/crm', label: 'CRM', icon: Compass },
+  { href: '/workspace/teams', label: 'Teams', icon: UsersRound },
+  { href: '/workspace/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/workspace/business-settings', label: 'Settings', icon: Settings },
+  { href: '/workspace/billing', label: 'Billing', icon: Wallet },
 ];
 
 const pageMeta: Record<string, { eyebrow: string; title: string; description: string }> = {
-  '/workspace': { eyebrow: 'Operator desk', title: 'Today', description: 'The handoffs that need a human touch.' },
-  '/workspace/leads': { eyebrow: 'Pipeline', title: 'Leads', description: 'Find the next best conversation.' },
-  '/workspace/calls': { eyebrow: 'Voice desk', title: 'Calls', description: 'A clear trail for every attempted connection.' },
-  '/workspace/appointments': { eyebrow: 'Calendar', title: 'Appointments', description: 'Verified meetings, ready for the team.' },
-  '/workspace/reports': { eyebrow: 'Pilot pulse', title: 'Reports', description: 'A grounded view of your weekly operation.' },
-  '/workspace/business-settings': { eyebrow: 'Control room', title: 'Business settings', description: 'Policy first. Then automation.' },
+  '/workspace': { eyebrow: 'Console', title: 'Dashboard', description: 'Monitor conversational workforce, call throughput, and appointments.' },
+  '/workspace/agents': { eyebrow: 'Console', title: 'AI Agents', description: 'Configure, duplicate, pause, or deploy conversational agents across standard business profiles.' },
+  '/workspace/agent-builder': { eyebrow: 'Console / AI Agents', title: 'Agent Builder', description: 'Design conversational prompts, voices, LLM parameters, and tool integrations.' },
+  '/workspace/live-calls': { eyebrow: 'Console', title: 'Live Calls', description: 'Supervise in-flight AI voice interactions and transfer to operators when required.' },
+  '/workspace/calls': { eyebrow: 'Console', title: 'Call History', description: 'Audio recordings, full transcripts, turn-by-turn dialogue, and AI summaries.' },
+  '/workspace/contacts': { eyebrow: 'Console', title: 'Contacts', description: 'Verified contact records, recipient timezones, and TCPA consent compliance.' },
+  '/workspace/crm': { eyebrow: 'Console', title: 'CRM', description: 'Track leads from incoming enquiry to qualification and booked appointments.' },
+  '/workspace/teams': { eyebrow: 'Console', title: 'Teams', description: 'Manage human operators, AI voice agent roles, and phone routing rules.' },
+  '/workspace/analytics': { eyebrow: 'Console', title: 'Analytics', description: 'Deep conversion funnels, speech latency, call sentiment, and quota usage.' },
+  '/workspace/business-settings': { eyebrow: 'Console', title: 'Settings', description: 'Quiet hours, regulatory compliance gates, webhook secrets, and phone numbers.' },
+  '/workspace/billing': { eyebrow: 'Console', title: 'Billing', description: 'Voice minutes consumption, telephony carrier charges, and pilot tier.' },
+  '/workspace/leads': { eyebrow: 'Console', title: 'Leads', description: 'Find the next best conversation.' },
+  '/workspace/appointments': { eyebrow: 'Console', title: 'Appointments', description: 'Verified meetings, ready for the team.' },
+  '/workspace/reports': { eyebrow: 'Console', title: 'Reports', description: 'A grounded view of your weekly operation.' },
 };
 
-// Local development shortcut: when the build is made with
-// VITE_LEADSPRINT_DEMO_AUTH=true (and the API server runs with
-// LEADSPRINT_DEMO_AUTH=true / NODE_ENV != production), the console skips
-// Clerk entirely and talks to the seeded demo workspace. Never build a
-// public deployment with this flag set — it removes sign-in completely.
+// Local development shortcut
 const rawClerkKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim();
 const clerkPubKey = rawClerkKey
   ? publishableKeyFromHost(window.location.hostname, rawClerkKey)
   : '';
 
-// How the console authenticates is fixed at build time (see lib/authMode.ts):
-// demo (explicit flag, or a dev build with no Clerk key), clerk, or — for a
-// production build with no Clerk key — "unconfigured", which renders a clear
-// setup message instead of a demo banner over an API that answers 401.
 const AUTH_MODE = resolveAuthMode({
   demoFlag: import.meta.env.VITE_LEADSPRINT_DEMO_AUTH,
   clerkKey: clerkPubKey,
@@ -98,10 +133,10 @@ function DemoAuthBanner() {
   if (!DEMO_AUTH) return null;
   return (
     <div
-      className="flex items-center justify-center gap-2 bg-[hsl(var(--destructive)/.12)] px-4 py-2 text-center text-[11px] font-semibold uppercase tracking-[.14em] text-[hsl(var(--destructive))]"
+      className="flex items-center justify-center gap-2 bg-violet-50/90 border-b border-violet-100 px-4 py-1.5 text-center text-[11px] font-semibold tracking-wide text-violet-700"
       data-testid="banner-demo-auth"
     >
-      <ShieldCheck size={14} /> Demo auth — sign-in disabled, seeded workspace, local use only
+      <ShieldCheck size={13} /> BoomiSolutions Demo Workspace — Local environment active
     </div>
   );
 }
@@ -116,133 +151,180 @@ function Shell({ children, session }: { children: ReactNode; session: any }) {
   const user = session?.user;
   const handleSignOut = () => signOutAction(basePath || '/').then(() => setLocation('/'));
 
+  // Live ticking clock in header (matching screenshot e.g. 10:10:10 AM)
+  const [currentTime, setCurrentTime] = useState('');
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTime(now.toLocaleTimeString('en-US', { hour12: true }));
+    };
+    updateTime();
+    const timer = setInterval(updateTime, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <div className="min-h-[100dvh] bg-background text-foreground">
+    <div className="min-h-[100dvh] bg-slate-50/50 text-slate-800">
       <aside
-        className={`fixed inset-y-0 left-0 z-30 flex w-[248px] flex-col bg-[hsl(var(--sidebar))] px-4 py-5 text-[hsl(var(--sidebar-foreground))] transition-transform duration-300 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-30 flex w-[235px] flex-col border-r border-slate-200/90 bg-white px-3 py-5 text-slate-700 transition-transform duration-300 md:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex items-center justify-between px-3">
-          <Link href="/workspace" className="flex items-center gap-3" data-testid="link-brand">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[hsl(var(--sidebar-primary))] font-mono text-sm font-bold text-[hsl(var(--sidebar-primary-foreground))]">
-              LS
-            </span>
-            <span>
-              <span className="block text-[15px] font-bold tracking-[-.02em]">LeadSprint</span>
-              <span className="block text-[10px] uppercase tracking-[.2em] text-[hsl(var(--sidebar-foreground)/.52)]">
-                Operator console
-              </span>
-            </span>
+        {/* Brand Logo - BoomiSolutions */}
+        <div className="flex items-center justify-between px-2">
+          <Link href="/workspace" className="flex items-center gap-2.5" data-testid="link-brand">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-violet-600 to-indigo-500 text-white shadow-xs">
+              <div className="flex items-end gap-0.5 h-3.5">
+                <span className="w-0.5 bg-white rounded-full h-1.5"></span>
+                <span className="w-0.5 bg-white rounded-full h-3.5"></span>
+                <span className="w-0.5 bg-white rounded-full h-2.5"></span>
+              </div>
+            </div>
+            <div>
+              <span className="block text-sm font-bold tracking-tight text-slate-900">BoomiSolutions</span>
+            </div>
           </Link>
           <button
-            className="text-[hsl(var(--sidebar-foreground)/.65)] md:hidden"
+            className="text-slate-400 hover:text-slate-600 md:hidden"
             onClick={() => setMobileOpen(false)}
             data-testid="button-close-menu"
           >
             <X size={18} />
           </button>
         </div>
-        <div className="mt-9 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-[hsl(var(--sidebar-foreground)/.42)]">
-          Workspace
-        </div>
-        <nav className="mt-3 space-y-1" aria-label="Main navigation">
+
+        {/* Sidebar Nav Items */}
+        <nav className="mt-7 space-y-1 overflow-y-auto px-1" aria-label="Main navigation">
           {navItems.map((item) => {
-            const active = item.href === location;
+            const active = item.href === location || (item.subItems && item.subItems.some((s) => s.href === location));
             const Icon = item.icon;
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                data-testid={`link-nav-${item.label.toLowerCase().replaceAll(' ', '-')}`}
-                className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-[hsl(var(--sidebar-primary)/.16)] text-[hsl(var(--sidebar-primary))]'
-                    : 'text-[hsl(var(--sidebar-foreground)/.68)] hover:bg-[hsl(var(--sidebar-accent))] hover:text-[hsl(var(--sidebar-foreground))]'
-                }`}
-              >
-                <Icon size={17} strokeWidth={active ? 2.4 : 1.8} />
-                <span>{item.label}</span>
-                {active && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-[hsl(var(--sidebar-primary))]" />}
-              </Link>
+              <div key={item.href} className="space-y-0.5">
+                <Link
+                  href={item.href}
+                  onClick={() => setMobileOpen(false)}
+                  data-testid={`link-nav-${item.label.toLowerCase().replaceAll(' ', '-')}`}
+                  className={`group flex items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
+                    active
+                      ? 'bg-violet-50 text-violet-700 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon size={16} strokeWidth={active ? 2.3 : 1.8} className={active ? 'text-violet-600' : 'text-slate-400 group-hover:text-slate-600'} />
+                  <span>{item.label}</span>
+                  {item.badge && (
+                    <span className="ml-auto rounded-full bg-red-50 border border-red-200 px-1.5 py-0.2 font-mono text-[9px] font-bold text-red-600 flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+                      {item.badge}
+                    </span>
+                  )}
+                </Link>
+
+                {/* Subitems if any (e.g. Agent Builder under AI Agents) */}
+                {item.subItems && (
+                  <div className="ml-7 pl-2 space-y-0.5 border-l border-slate-100">
+                    {item.subItems.map((sub) => {
+                      const subActive = sub.href === location;
+                      const SubIcon = sub.icon;
+                      return (
+                        <Link
+                          key={sub.href}
+                          href={sub.href}
+                          onClick={() => setMobileOpen(false)}
+                          className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition ${
+                            subActive
+                              ? 'text-violet-700 font-bold bg-violet-50/60'
+                              : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
+                          }`}
+                        >
+                          <SubIcon size={11} className={subActive ? 'text-violet-600' : 'text-slate-400'} />
+                          <span>{sub.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </nav>
-        <div className="mt-auto">
-          <div className="mb-4 rounded-xl border border-[hsl(var(--sidebar-border))] bg-[hsl(var(--sidebar-accent)/.6)] p-3">
-            <div className="flex items-center gap-2 text-xs font-semibold">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  health.isError ? 'bg-[hsl(var(--destructive))]' : 'animate-pulse-dot bg-[hsl(var(--sidebar-primary))]'
-                }`}
-              />
-              {health.isError ? 'Service needs attention' : 'Systems operational'}
-            </div>
-            <p className="mt-2 text-[11px] leading-5 text-[hsl(var(--sidebar-foreground)/.5)]">
-              Policy checks stay visible before any call is placed.
-            </p>
-          </div>
-          <div className="flex items-center gap-3 border-t border-[hsl(var(--sidebar-border))] px-2 pt-4">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[hsl(var(--sidebar-primary)/.18)] font-mono text-[11px] text-[hsl(var(--sidebar-primary))]">
-              {initials(user?.name)}
+
+        {/* User Card at bottom of sidebar */}
+        <div className="mt-auto border-t border-slate-100 px-2 pt-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 font-mono text-xs font-bold text-violet-700">
+              {initials(user?.name || 'Sruthi')}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-semibold">{user?.name || 'Operator'}</p>
-              <p className="truncate text-[11px] text-[hsl(var(--sidebar-foreground)/.5)]">{business?.name || 'Workspace'}</p>
+              <p className="truncate text-xs font-semibold text-slate-800">{user?.name || 'sruthi'}</p>
+              <p className="truncate text-[10px] text-slate-400 font-mono">Operator</p>
             </div>
             <button
-              className="text-[hsl(var(--sidebar-foreground)/.55)] hover:text-[hsl(var(--sidebar-primary))]"
+              className="text-slate-400 hover:text-slate-700 transition"
               onClick={handleSignOut}
               data-testid="button-logout"
               title="Sign out"
             >
-              <LogOut size={15} />
+              <LogOut size={14} />
             </button>
           </div>
         </div>
       </aside>
+
       {mobileOpen && (
         <button
-          className="fixed inset-0 z-20 bg-[#102632]/40 md:hidden"
+          className="fixed inset-0 z-20 bg-slate-900/20 backdrop-blur-xs md:hidden"
           onClick={() => setMobileOpen(false)}
           data-testid="button-close-overlay"
           aria-label="Close menu"
         />
       )}
-      <main className="min-h-[100dvh] md:pl-[248px]">
+
+      <main className="min-h-[100dvh] md:pl-[235px]">
         <DemoAuthBanner />
-        <header className="sticky top-0 z-10 border-b border-border bg-[hsl(var(--background)/.9)] backdrop-blur-xl">
-          <div className="flex h-[76px] items-center justify-between px-5 sm:px-8 lg:px-10">
+
+        {/* Top Header Bar matching BoomiSolutions */}
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur-md">
+          <div className="flex h-14 items-center justify-between px-5 sm:px-8">
             <div className="flex items-center gap-3">
               <button
-                className="rounded-lg p-2 text-muted-foreground hover:bg-[hsl(var(--muted))] md:hidden"
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 md:hidden"
                 onClick={() => setMobileOpen(true)}
                 data-testid="button-open-menu"
               >
-                <Menu size={20} />
+                <Menu size={18} />
               </button>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-[.19em] text-[hsl(var(--accent))]">{meta.eyebrow}</p>
-                <h1 className="mt-0.5 text-xl font-bold tracking-[-.03em]">{meta.title}</h1>
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                <span>{meta.eyebrow}</span>
+                <span>/</span>
+                <span className="font-semibold text-slate-800">{meta.title}</span>
               </div>
             </div>
-            <div className="flex items-center gap-2 sm:gap-4">
-              <span className="hidden text-xs text-muted-foreground sm:block">
-                {business?.market === 'IN' ? 'India' : 'United States'} · {business?.timezone || 'Timezone not set'}
-              </span>
+
+            {/* Right side: Operational pill, Notification Bell, Live Clock */}
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="hidden sm:flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200/80">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>All Systems Operational</span>
+              </div>
+
               <button
-                className="relative rounded-lg p-2 text-muted-foreground transition-colors hover:bg-[hsl(var(--muted))] hover:text-foreground"
+                className="relative rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                 data-testid="button-notifications"
                 title="Notifications"
               >
-                <Bell size={18} />
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[hsl(var(--secondary))]" />
+                <Bell size={16} />
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-violet-600" />
               </button>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-xs font-semibold text-slate-600">
+                {currentTime || '10:10:10 AM'}
+              </div>
             </div>
           </div>
         </header>
-        <div className="mx-auto max-w-[1500px] px-5 py-7 sm:px-8 lg:px-10">{children}</div>
+
+        <div className="mx-auto max-w-[1500px] px-5 py-6 sm:px-8">{children}</div>
       </main>
     </div>
   );
@@ -454,8 +536,16 @@ function WorkspaceRoute() {
       <AuthGate>
         <Switch>
           <Route path="/workspace" component={TodayPage} />
-          <Route path="/workspace/leads" component={LeadsPage} />
+          <Route path="/workspace/agents" component={AgentsPage} />
+          <Route path="/workspace/agent-builder" component={AgentBuilderPage} />
+          <Route path="/workspace/live-calls" component={LiveCallsPage} />
           <Route path="/workspace/calls" component={CallsPage} />
+          <Route path="/workspace/contacts" component={ContactsPage} />
+          <Route path="/workspace/crm" component={CrmPage} />
+          <Route path="/workspace/teams" component={TeamsPage} />
+          <Route path="/workspace/analytics" component={AnalyticsPage} />
+          <Route path="/workspace/billing" component={BillingPage} />
+          <Route path="/workspace/leads" component={LeadsPage} />
           <Route path="/workspace/appointments" component={AppointmentsPage} />
           <Route path="/workspace/business-settings" component={SettingsPage} />
           <Route path="/workspace/reports" component={ReportsPage} />
