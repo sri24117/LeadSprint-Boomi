@@ -9,7 +9,7 @@
 
 import express, { type Express } from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import {
   activitiesTable,
@@ -52,6 +52,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   __resetLeadsprintDb();
 });
 
@@ -148,7 +149,10 @@ describe("GET /api/today", () => {
 
 describe("GET /api/today", () => {
   it("counts only appointments inside the business's local day", async () => {
-    // 13:00 America/New_York on the frozen day these tests run in.
+    // Freeze Date only (not network timers). Relative +2h crossed the local
+    // midnight boundary on real CI runs and made this test fail by time of day.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-18T16:00:00Z"));
     await db.insert(contactsTable).values({
       id: "contact_today",
       businessId: BUSINESS,
