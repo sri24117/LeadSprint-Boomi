@@ -1,6 +1,5 @@
 import { Router, type IRouter } from "express";
 import { clerkMiddleware } from "@clerk/express";
-import { publishableKeyFromHost } from "@clerk/shared/keys";
 import healthRouter from "./health";
 import leadsprintRouter, {
   DEMO_BUSINESS_ID,
@@ -10,7 +9,6 @@ import webhooksRouter from "./webhooks";
 import cronRouter from "./cron";
 import agentRouter from "./agent";
 import { requireAuth } from "../middlewares/auth";
-import { getClerkProxyHost } from "../middlewares/clerkProxyMiddleware";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -79,17 +77,12 @@ if (demoAuthEnabled) {
   });
 
   router.use(
-    clerkMiddleware((req) => {
-      // publishableKeyFromHost() throws on an empty host, so a request
-      // without a Host header (HTTP/1.0 clients, some probes) must not
-      // reach it.
-      const host = getClerkProxyHost(req);
-      return {
-        publishableKey: host
-          ? publishableKeyFromHost(host, process.env.CLERK_PUBLISHABLE_KEY)
-          : process.env.CLERK_PUBLISHABLE_KEY,
-      };
-    }),
+    clerkMiddleware(() => ({
+      // Never derive a live instance key from Host / X-Forwarded-Host. The
+      // configured key must match the frontend and CLERK_SECRET_KEY, even
+      // when the app is served from a custom domain or behind a proxy.
+      publishableKey: process.env.CLERK_PUBLISHABLE_KEY?.trim(),
+    })),
   );
   router.use(requireAuth);
 }

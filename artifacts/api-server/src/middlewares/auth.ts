@@ -1,7 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { getAuth } from "@clerk/express";
-import { and, eq } from "drizzle-orm";
-import { db, businessesTable, usersTable, usageTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { db, usersTable } from "@workspace/db";
+import { provisionOperatorWorkspace } from "../lib/operatorWorkspace";
 
 declare global {
   namespace Express {
@@ -52,56 +53,7 @@ export async function requireAuth(
     .limit(1);
 
   if (!user) {
-    const businessId = `business_${userId}`;
-    const [business] = await db
-      .insert(businessesTable)
-      .values({
-        id: businessId,
-        name: "New LeadSprint workspace",
-        market: "US",
-        timezone: "America/New_York",
-        phoneNumber: "",
-        transferNumber: "",
-        projectName: "Configure your first campaign",
-        approvedFaq: "",
-        qualificationQuestions: [],
-        escalationRules:
-          "Transfer questions outside approved business information to a human.",
-      })
-      .onConflictDoNothing()
-      .returning();
-
-    if (!business) {
-      [user] = await db
-        .select()
-        .from(usersTable)
-        .where(and(eq(usersTable.id, userId), eq(usersTable.businessId, businessId)))
-        .limit(1);
-    } else {
-      [user] = await db
-        .insert(usersTable)
-        .values({
-          id: userId,
-          businessId,
-          name,
-          email,
-          role: "owner",
-          lastLoginAt: new Date(),
-        })
-        .onConflictDoNothing()
-        .returning();
-      const now = new Date();
-      const usageRowId = `usage_${businessId}_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-      await db
-        .insert(usageTable)
-        .values({
-          id: usageRowId,
-          businessId,
-          periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
-          periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
-        })
-        .onConflictDoNothing();
-    }
+    user = await provisionOperatorWorkspace({ userId, name, email });
   } else {
     [user] = await db
       .update(usersTable)

@@ -7,6 +7,15 @@ follow-up only; inbound call answering is not yet supported.) See `docs/leadspri
 architecture and `Coolify + Git + Collaboration Deploy Sheet` for the
 infra/collaboration workflow this repo is meant to be deployed with.
 
+## Release readiness
+
+See the [2026-11-18 market-readiness audit](docs/market-readiness-audit-2026-11-18.md)
+for the Clerk/API-session fixes, deployment checks, verified test results and
+remaining launch blockers. The product is not approved for a public/self-serve
+launch. Agent management, live-call controls, teams, advanced analytics and billing
+screens are prototype-only: they are unavailable in authenticated customer
+workspaces and explicitly labeled in local demos.
+
 ## Stack
 
 pnpm monorepo · Express 5 API (`artifacts/api-server`) · React/Vite operator

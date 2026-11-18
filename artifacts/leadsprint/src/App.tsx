@@ -5,7 +5,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { ClerkProvider, SignIn, SignUp, useAuth, useClerk } from "@clerk/react";
-import { publishableKeyFromHost } from "@clerk/react/internal";
 import { shadcn } from "@clerk/themes";
 import {
   AlertTriangle,
@@ -40,6 +39,8 @@ import {
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Button, Skeleton, initials } from "@/components/common";
 import { resolveAuthMode } from "@/lib/authMode";
+import { ClerkApiAuth } from "@/components/clerk-api-auth";
+import { PilotFeatureBoundary } from "@/components/pilot-feature-boundary";
 import NotFound from "@/pages/not-found";
 import TodayPage from "@/pages/today";
 import LeadsPage from "@/pages/leads";
@@ -200,10 +201,9 @@ const pageMeta: Record<
 };
 
 // Local development shortcut
-const rawClerkKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim();
-const clerkPubKey = rawClerkKey
-  ? publishableKeyFromHost(window.location.hostname, rawClerkKey)
-  : "";
+// Pin the configured Clerk instance. Deriving a key from the app hostname
+// replaces pk_live_* keys and breaks custom / preview / reverse-proxy domains.
+const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY?.trim() ?? "";
 
 const AUTH_MODE = resolveAuthMode({
   demoFlag: import.meta.env.VITE_LEADSPRINT_DEMO_AUTH,
@@ -534,6 +534,7 @@ function LandingPage() {
 
 function AuthError({ error }: { error?: unknown }) {
   const signOutAction = useSignOutAction();
+  const unauthenticated = (error as { status?: number })?.status === 401;
   const rawErr =
     (error as any)?.data?.detail ||
     (error as any)?.data?.error ||
@@ -546,11 +547,12 @@ function AuthError({ error }: { error?: unknown }) {
           size={24}
         />
         <h1 className="mt-4 text-xl font-bold">
-          Workspace setup is incomplete
+          {unauthenticated ? "API session could not be verified" : "Workspace could not be loaded"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-[hsl(var(--muted-foreground))]">
-          Your sign-in is valid, but the operator workspace could not be loaded.
-          Try again or sign out.
+          {unauthenticated
+            ? "The API did not accept your sign-in session. Sign out and sign in again. If this continues, the operator should check that the frontend and server Clerk keys belong to the same instance and environment, then rebuild and redeploy. Provider API keys do not fix a sign-in error."
+            : "The operator workspace could not be loaded. Try again. If this continues, contact the deployment operator to check workspace provisioning and database health."}
         </p>
         {rawErr && (
           <div className="mt-4 rounded-lg bg-[hsl(var(--muted))/0.8] p-3 text-left font-mono text-[11px] text-[hsl(var(--muted-foreground))] break-words">
@@ -672,15 +674,39 @@ function WorkspaceRoute() {
       <AuthGate>
         <Switch>
           <Route path="/workspace" component={TodayPage} />
-          <Route path="/workspace/agents" component={AgentsPage} />
-          <Route path="/workspace/agent-builder" component={AgentBuilderPage} />
-          <Route path="/workspace/live-calls" component={LiveCallsPage} />
+          <Route path="/workspace/agents">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <AgentsPage />
+            </PilotFeatureBoundary>
+          </Route>
+          <Route path="/workspace/agent-builder">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <AgentBuilderPage />
+            </PilotFeatureBoundary>
+          </Route>
+          <Route path="/workspace/live-calls">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <LiveCallsPage />
+            </PilotFeatureBoundary>
+          </Route>
           <Route path="/workspace/calls" component={CallsPage} />
           <Route path="/workspace/contacts" component={ContactsPage} />
           <Route path="/workspace/crm" component={CrmPage} />
-          <Route path="/workspace/teams" component={TeamsPage} />
-          <Route path="/workspace/analytics" component={AnalyticsPage} />
-          <Route path="/workspace/billing" component={BillingPage} />
+          <Route path="/workspace/teams">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <TeamsPage />
+            </PilotFeatureBoundary>
+          </Route>
+          <Route path="/workspace/analytics">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <AnalyticsPage />
+            </PilotFeatureBoundary>
+          </Route>
+          <Route path="/workspace/billing">
+            <PilotFeatureBoundary isDemo={DEMO_AUTH}>
+              <BillingPage />
+            </PilotFeatureBoundary>
+          </Route>
           <Route path="/workspace/leads" component={LeadsPage} />
           <Route path="/workspace/appointments" component={AppointmentsPage} />
           <Route path="/workspace/business-settings" component={SettingsPage} />
@@ -801,7 +827,9 @@ function ClerkApp() {
     >
       <QueryClientProvider client={queryClient}>
         <ClerkQueryClientCacheInvalidator />
-        <Router />
+        <ClerkApiAuth>
+          <Router />
+        </ClerkApiAuth>
       </QueryClientProvider>
     </ClerkProvider>
   );
